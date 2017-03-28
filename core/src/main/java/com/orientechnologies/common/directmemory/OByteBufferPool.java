@@ -525,8 +525,8 @@ public class OByteBufferPool implements OOrientStartupListener, OOrientShutdownL
     if (directByteBufferWithCleaner != null && !cleaned.contains(directByteBufferWithCleaner)) {
       cleaned.add(directByteBufferWithCleaner);
       ((DirectBuffer) directByteBufferWithCleaner).cleaner().clean();
-      if (TRACK)
-        OLogManager.instance().info(this, "DIRECT-TRACK: cleaned " + directByteBufferWithCleaner);
+//      if (TRACK)
+//        OLogManager.instance().info(this, "DIRECT-TRACK: cleaned " + directByteBufferWithCleaner);
     }
   }
 

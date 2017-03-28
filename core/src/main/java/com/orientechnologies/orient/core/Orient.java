@@ -324,7 +324,7 @@ public class Orient extends OListenerManger<OOrientListener> {
 
       active = false;
 
-      OLogManager.instance().info(this, "Orient Engine is shutting down...");
+      //OLogManager.instance().info(this, "Orient Engine is shutting down...");
       for (OShutdownHandler handler : shutdownHandlers) {
         try {
           OLogManager.instance().debug(this, "Shutdown handler %s is going to be called", handler);
@@ -336,8 +336,8 @@ public class Orient extends OListenerManger<OOrientListener> {
       }
 
       shutdownHandlers.clear();
-      OLogManager.instance().info(this, "OrientDB Engine shutdown complete");
-      OLogManager.instance().flush();
+      //OLogManager.instance().info(this, "OrientDB Engine shutdown complete");
+      //OLogManager.instance().flush();
     } finally {
       try {
         removeShutdownHook();
@@ -394,7 +394,7 @@ public class Orient extends OListenerManger<OOrientListener> {
       final List<OStorage> storagesCopy = new ArrayList<OStorage>(storages.values());
       for (OStorage stg : storagesCopy) {
         try {
-          OLogManager.instance().info(this, "- shutdown storage: " + stg.getName() + "...");
+//          OLogManager.instance().info(this, "- shutdown storage: " + stg.getName() + "...");
           stg.shutdown();
         } catch (Throwable e) {
           OLogManager.instance().warn(this, "-- error on shutdown storage", e);
