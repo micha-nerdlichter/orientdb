@@ -30,7 +30,7 @@ public class OLuceneHighlighter extends OLazyHashMap {
       new QueryScorer(queryContext.query)
     );
     highlighter.setTextFragmenter(new NullFragmenter());
-    Map<String, String> highlightedTexts = new HashMap<>();
+    Map<String, String> highlightedTexts = new HashMap<String, String>();
     ODocument rec = new ODocument(recordId);
     for (Object fieldName : hits.keySet()) {
       String text = rec.field(fieldName.toString());
@@ -40,7 +40,8 @@ public class OLuceneHighlighter extends OLazyHashMap {
           fieldName.toString(),
           highlighter.getBestFragment(tokenStream, text)
         );
-      } catch (IOException | InvalidTokenOffsetsException e) {
+      } catch (IOException e) {
+      } catch (InvalidTokenOffsetsException e) {
       }
     }
     return highlightedTexts;

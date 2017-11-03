@@ -28,7 +28,7 @@ public class OLuceneHits extends OLazyHashMap {
   
   @Override
   protected Map<String, Map<String, Float>> load() {
-    Map hits = new HashMap<String, Map<String, Float>>();
+    Map<String, Map<String, Float>> hits = new HashMap<String, Map<String, Float>>();
     try {
       collectHits(queryContext.getSearcher(), score, queryOriginal, queryContext.query, hits);
     } catch (IOException ioe) {}
@@ -42,12 +42,16 @@ public class OLuceneHits extends OLazyHashMap {
         Term[] terms = ((PhraseQuery) queryOriginal).getTerms();
         String field = terms[0].field();
         if (!hits.containsKey(field)) {
-          hits.put(field, new HashMap<>());
+          hits.put(field, new HashMap<String, Float>());
         }
-        String phrase = Arrays.stream(terms).map(term -> term.text()).collect(java.util.stream.Collectors.joining(" "));
-        hits.get(field).put(phrase, expl.getValue());
+        StringBuilder phrase = new StringBuilder();
+        String delimiter = "";
+        for (Term term : terms) {
+          phrase.append(delimiter).append(term.text());
+          delimiter = " ";
+        }
+        hits.get(field).put(phrase.toString(), expl.getValue());
       }
-      return;
     }
 
     if (queryOriginal instanceof TermQuery) {
@@ -55,11 +59,10 @@ public class OLuceneHits extends OLazyHashMap {
       if (expl.isMatch()) {
         Term term = ((TermQuery)queryOriginal).getTerm();
         if (!hits.containsKey(term.field())) {
-          hits.put(term.field(), new HashMap<>());
+          hits.put(term.field(), new HashMap<String, Float>());
         }
         hits.get(term.field()).put(term.text(), expl.getValue());
       }
-      return;
     }
     
     if (queryOriginal instanceof BooleanQuery && query instanceof BooleanQuery) {
@@ -74,7 +77,6 @@ public class OLuceneHits extends OLazyHashMap {
              hits
         );
       }
-      return;
     }
   }
 }
