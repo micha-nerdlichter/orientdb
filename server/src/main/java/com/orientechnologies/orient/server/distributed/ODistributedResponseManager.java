@@ -24,7 +24,6 @@ import com.orientechnologies.common.exception.OException;
 import com.orientechnologies.common.util.OCallable;
 import com.orientechnologies.orient.core.Orient;
 import com.orientechnologies.orient.core.command.OCommandDistributedReplicateRequest;
-import com.orientechnologies.orient.core.config.OGlobalConfiguration;
 import com.orientechnologies.orient.core.db.ODatabaseDocumentInternal;
 import com.orientechnologies.orient.core.exception.OConcurrentCreateException;
 import com.orientechnologies.orient.core.record.impl.ODocument;
@@ -572,7 +571,10 @@ public class ODistributedResponseManager {
   public Object getResponseFromServer(final String s) {
     synchronousResponsesLock.lock();
     try {
-      return responses.get(s);
+      final Object r = responses.get(s);
+      if (r == NO_RESPONSE)
+        return null;
+      return r;
     } finally {
       synchronousResponsesLock.unlock();
     }
@@ -685,33 +687,6 @@ public class ODistributedResponseManager {
                 setQuorumResponse(r);
                 return true;
               }
-            }
-          }
-        }
-      }
-
-      if (reachedTimeout && responseGroups.size() == 1
-          && OGlobalConfiguration.DISTRIBUTED_AUTO_REMOVE_OFFLINE_SERVERS.getValueAsLong() == 0) {
-        // CHECK FOR OFFLINE SERVERS
-        final List<String> missingNodes = getMissingNodes();
-
-        // EXCLUDE THE SERVERS OFFLINE OR NOT_AVAILABLE
-        dManager.getNodesWithStatus(missingNodes, getDatabaseName(), ODistributedServerManager.DB_STATUS.OFFLINE,
-            ODistributedServerManager.DB_STATUS.NOT_AVAILABLE);
-
-        if (responseGroups.get(0).size() + missingNodes.size() >= quorum) {
-          final ODistributedResponse response = responseGroups.get(0).get(0);
-          if (response != null) {
-            if (response.getPayload() instanceof Throwable) {
-              ODistributedServerLog.debug(this, dManager.getLocalNodeName(), null, DIRECTION.NONE,
-                  "%d server(s) (%s) became unreachable during the request, even decreasing the quorum (%d) the response cannot be accepted because is an error: %s",
-                  missingNodes.size(), missingNodes, quorum, request);
-            } else {
-              ODistributedServerLog.debug(this, dManager.getLocalNodeName(), null, DIRECTION.NONE,
-                  "%d server(s) (%s) became unreachable during the request, decreasing the quorum (%d) and accept the request: %s",
-                  missingNodes.size(), missingNodes, quorum, request);
-              setQuorumResponse(responseGroups.get(0).get(0));
-              return true;
             }
           }
         }
@@ -861,7 +836,7 @@ public class ODistributedResponseManager {
     if (task.isIdempotent()) {
       // NO UNDO IS NECESSARY
       ODistributedServerLog
-          .warn(this, dManager.getLocalNodeName(), null, DIRECTION.NONE, "No undo because the task (%s) is idempotent", task);
+          .debug(this, dManager.getLocalNodeName(), null, DIRECTION.NONE, "No undo because the task (%s) is idempotent", task);
       return false;
     }
 
@@ -1025,12 +1000,12 @@ public class ODistributedResponseManager {
 
         if (!serversToFollowup.isEmpty()) {
           ODistributedServerLog.debug(this, localNodeName, serversToFollowup.toString(), ODistributedServerLog.DIRECTION.OUT,
-              "Distributed transaction (reqId=%s quorum=%d result=%s), checking for any fix needed...", request.getId(), quorum,
+              "Distributed response (reqId=%s quorum=%d result=%s), checking for any fix needed...", request.getId(), quorum,
               quorumResponse);
 
           for (String s : serversToFollowup) {
             Object response = responses.get(s);
-            if( response == NO_RESPONSE)
+            if (response == NO_RESPONSE)
               response = null;
 
             if (quorumResponse != null && !quorumResponse.equals(response)) {

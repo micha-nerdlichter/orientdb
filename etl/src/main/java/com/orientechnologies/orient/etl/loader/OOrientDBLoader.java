@@ -39,6 +39,8 @@ import com.tinkerpop.blueprints.impls.orient.OrientGraphFactory;
 import com.tinkerpop.blueprints.impls.orient.OrientVertex;
 
 import java.io.IOException;
+import com.orientechnologies.orient.etl.context.OETLContextWrapper;
+
 import java.util.List;
 import java.util.Locale;
 import java.util.concurrent.atomic.AtomicLong;
@@ -128,6 +130,9 @@ public class OOrientDBLoader extends OAbstractLoader implements OLoader {
       } else {
         doc.save();
       }
+
+    } else {
+      OETLContextWrapper.getInstance().getMessageHandler().error(this, "input type not supported::  %s", input.getClass());
     }
 
     progress.incrementAndGet();
@@ -493,9 +498,13 @@ public class OOrientDBLoader extends OAbstractLoader implements OLoader {
         if (idxType == null)
           throw new OConfigurationException("Index 'type' missed in OrientDB Loader for index '" + idxName + "'");
 
+        final String algorithm = idx.field("algorithm");
+
         final List<String> idxFields = idx.field("fields");
         if (idxFields == null)
           throw new OConfigurationException("Index 'fields' missed in OrientDB Loader");
+
+
 
         String[] fields = new String[idxFields.size()];
         for (int f = 0; f < fields.length; ++f) {
@@ -534,7 +543,7 @@ public class OOrientDBLoader extends OAbstractLoader implements OLoader {
           // ALREADY EXISTS
           continue;
 
-        index = cls.createIndex(idxName, idxType, null, metadata, fields);
+        index = cls.createIndex(idxName, idxType, null, metadata, algorithm, fields);
         log(DEBUG, "- OrientDocumentLoader: created index '%s' type '%s' against Class '%s', fields %s", idxName, idxType, idxClass,
             idxFields);
       }

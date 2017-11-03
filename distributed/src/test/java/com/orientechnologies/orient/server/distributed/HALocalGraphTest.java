@@ -100,7 +100,7 @@ public class HALocalGraphTest extends AbstractServerClusterTxTest {
                 && operations.get() >= TOTAL_CYCLES_PER_THREAD * CONCURRENCY_LEVEL * 1 / 4) {
 
               // SLOW DOWN A LITTLE BIT
-              sleep = 5;
+              sleep = 1;
 
               // SHUTDOWN LASt SERVER AT 1/3 OF PROGRESS
               banner("SIMULATE SOFT SHUTDOWN OF SERVER " + (SERVERS - 1));
@@ -242,7 +242,7 @@ public class HALocalGraphTest extends AbstractServerClusterTxTest {
                 boolean retry = true;
 
                 Iterable<Vertex> vtxs = null;
-                for (int k = 0; k < 100 && retry; k++)
+                for (int k = 0; k < 10 && retry; k++)
                   try {
                     vtxs = graph.command(new OCommandSQL(query)).execute();
                     break;
@@ -256,7 +256,7 @@ public class HALocalGraphTest extends AbstractServerClusterTxTest {
 
                     Exception lastException = null;
 
-                    for (int k = 0; k < 100 && retry; k++) {
+                    for (int k = 0; k < 10 && retry; k++) {
                       OrientVertex vtx1 = (OrientVertex) vtx;
                       try {
                         vtx1.setProperty("prop5", "prop55");
@@ -279,7 +279,7 @@ public class HALocalGraphTest extends AbstractServerClusterTxTest {
                       } catch (ONeedRetryException ex) {
                         lastException = ex;
                         if (ex instanceof ODistributedRecordLockedException) {
-                          if (k > 20)
+                          if (k > 5)
                             log("*$$$$$$$$$$$$$$ [" + id + "][" + k + "] ODistributedRecordLockedException: [" + ex + "] Cause: ["
                                 + (ex.getCause() != null ? ex.getCause() : "--") + "] for vertex " + vtx1);
                           vtx1.reload();

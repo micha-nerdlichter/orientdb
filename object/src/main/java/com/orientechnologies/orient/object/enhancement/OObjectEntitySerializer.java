@@ -111,7 +111,7 @@ public class OObjectEntitySerializer {
   }
 
   protected static OObjectEntitySerializedSchema getCurrentSerializedSchema() {
-    OStorage storage = ODatabaseRecordThreadLocal.INSTANCE.get().getStorage();
+    OStorage storage = ODatabaseRecordThreadLocal.instance().get().getStorage();
     OObjectEntitySerializedSchema serializedShchema = storage
         .getResource(SIMPLE_NAME, new Callable<OObjectEntitySerializedSchema>() {
           @Override
@@ -405,7 +405,7 @@ public class OObjectEntitySerializer {
    */
   @SuppressWarnings("unchecked")
   public static synchronized void registerClass(final Class<?> iClass, boolean forceReload) {
-    if (!ODatabaseRecordThreadLocal.INSTANCE.isDefined() || ODatabaseRecordThreadLocal.INSTANCE.get().isClosed())
+    if (!ODatabaseRecordThreadLocal.instance().isDefined() || ODatabaseRecordThreadLocal.instance().get().isClosed())
       return;
     final OObjectEntitySerializedSchema serializedSchema = getCurrentSerializedSchema();
     if (serializedSchema == null)
@@ -419,7 +419,7 @@ public class OObjectEntitySerializer {
     boolean reloadSchema = false;
     boolean automaticSchemaGeneration = false;
 
-    final ODatabaseDocumentInternal db = ODatabaseRecordThreadLocal.INSTANCE.get();
+    final ODatabaseDocumentInternal db = ODatabaseRecordThreadLocal.instance().get();
     final OSchema oSchema = db.getMetadata().getSchema();
     if (forceReload) {
       oSchema.reload();
@@ -1371,11 +1371,11 @@ public class OObjectEntitySerializer {
 
     if (iMultiValue instanceof Set<?>) {
       for (Object o : sourceValues) {
-        ((Set<Object>) result).add(typeToStream(o, linkedType, db, null));
+        ((Set<Object>) result).add(typeToStream(o, linkedType, db, iRecord));
       }
     } else if (iMultiValue instanceof List<?>) {
       for (int i = 0; i < sourceValues.size(); i++) {
-        ((List<Object>) result).add(typeToStream(((List<?>) sourceValues).get(i), linkedType, db, null));
+        ((List<Object>) result).add(typeToStream(((List<?>) sourceValues).get(i), linkedType, db, iRecord));
       }
     } else {
       if (iMultiValue instanceof OObjectLazyMap<?>) {
@@ -1388,7 +1388,7 @@ public class OObjectEntitySerializer {
         else
           result = new ORecordLazyMap(iRecord);
         for (Entry<Object, Object> entry : ((Map<Object, Object>) iMultiValue).entrySet()) {
-          ((Map<Object, Object>) result).put(entry.getKey(), typeToStream(entry.getValue(), linkedType, db, null));
+          ((Map<Object, Object>) result).put(entry.getKey(), typeToStream(entry.getValue(), linkedType, db, iRecord));
         }
       }
     }

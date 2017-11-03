@@ -1,5 +1,6 @@
 package com.orientechnologies.lucene.test;
 
+import com.orientechnologies.common.io.OFileUtils;
 import com.orientechnologies.orient.core.db.document.ODatabaseDocument;
 import com.orientechnologies.orient.core.db.document.ODatabaseDocumentTx;
 import com.orientechnologies.orient.core.metadata.schema.OClass;
@@ -8,8 +9,10 @@ import com.orientechnologies.orient.core.metadata.schema.OType;
 import com.orientechnologies.orient.core.record.impl.ODocument;
 import com.orientechnologies.orient.core.sql.OCommandSQL;
 import org.junit.Assert;
+import org.junit.Before;
 import org.junit.Test;
 
+import java.io.File;
 import java.util.Collection;
 
 /**
@@ -17,8 +20,15 @@ import java.util.Collection;
  */
 public class LuceneFreezeReleaseTest {
 
+  @Before
+  public void setUp() throws Exception {
+    OFileUtils.deleteRecursively(new File("target/freezeRelease"));
+  }
+
   @Test
   public void freezeReleaseTest() {
+    if (isWindows())
+      return;
 
     ODatabaseDocument db = new ODatabaseDocumentTx("plocal:target/freezeRelease");
 
@@ -49,7 +59,6 @@ public class LuceneFreezeReleaseTest {
       Assert.assertEquals(2, results.size());
 
     } finally {
-
       db.drop();
     }
 
@@ -58,6 +67,8 @@ public class LuceneFreezeReleaseTest {
   // With double calling freeze/release
   @Test
   public void freezeReleaseMisUsageTest() {
+    if (isWindows())
+      return;
 
     ODatabaseDocument db = new ODatabaseDocumentTx("plocal:target/freezeRelease");
 
@@ -92,9 +103,13 @@ public class LuceneFreezeReleaseTest {
       Assert.assertEquals(2, results.size());
 
     } finally {
-
       db.drop();
     }
 
+  }
+
+  private boolean isWindows() {
+    final String osName = System.getProperty("os.name").toLowerCase();
+    return osName.contains("win");
   }
 }

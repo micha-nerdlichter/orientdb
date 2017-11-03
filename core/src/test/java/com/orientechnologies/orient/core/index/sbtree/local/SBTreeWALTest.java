@@ -9,7 +9,6 @@ import com.orientechnologies.orient.core.storage.OStorage;
 import com.orientechnologies.orient.core.storage.cache.OCacheEntry;
 import com.orientechnologies.orient.core.storage.cache.OReadCache;
 import com.orientechnologies.orient.core.storage.cache.OWriteCache;
-import com.orientechnologies.orient.core.storage.cache.local.OWOWCache;
 import com.orientechnologies.orient.core.storage.fs.OFileClassic;
 import com.orientechnologies.orient.core.storage.impl.local.OAbstractPaginatedStorage;
 import com.orientechnologies.orient.core.storage.impl.local.paginated.OClusterPage;
@@ -114,7 +113,7 @@ public class SBTreeWALTest extends SBTreeTest {
 
     actualStorage = (OLocalPaginatedStorage) databaseDocumentTx.getStorage();
     writeAheadLog = (ODiskWriteAheadLog) actualStorage.getWALInstance();
-    writeAheadLog.preventCutTill(writeAheadLog.getFlushedLsn());
+    writeAheadLog.addCutTillLimit(writeAheadLog.getFlushedLsn());
 
     actualReadCache = ((OAbstractPaginatedStorage) databaseDocumentTx.getStorage()).getReadCache();
 

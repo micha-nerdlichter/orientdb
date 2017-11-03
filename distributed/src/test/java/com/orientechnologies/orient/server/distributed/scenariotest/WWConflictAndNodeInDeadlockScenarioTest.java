@@ -117,7 +117,7 @@ public class WWConflictAndNodeInDeadlockScenarioTest extends AbstractScenarioTes
 
     // inserting record r1 and checking consistency on server1 and server2
     System.out.print("Inserting record r1 and on server1 and checking consistency on both server1 and server2...");
-    ODatabaseRecordThreadLocal.INSTANCE.set(dbServer1);
+    ODatabaseRecordThreadLocal.instance().set(dbServer1);
     ODocument r1onServer1 = new ODocument("Person").fields("id", "R001", "firstName", "Han", "lastName", "Solo");
     r1onServer1.save();
     Thread.sleep(200);
@@ -155,12 +155,12 @@ public class WWConflictAndNodeInDeadlockScenarioTest extends AbstractScenarioTes
       System.out.println("Exception was thrown!");
     }
     // wait for propagation
-    Thread.sleep(500);
+    Thread.sleep(5000);
 
     // end of deadlock on server3 and sync
     try {
       this.server3inDeadlock.set(false);
-      Thread.sleep(500); // waiting for sync of server3
+      Thread.sleep(5000); // waiting for sync of server3
     } catch (Exception e) {
       e.printStackTrace();
       fail("Exception was thrown!");
@@ -171,11 +171,11 @@ public class WWConflictAndNodeInDeadlockScenarioTest extends AbstractScenarioTes
     r1onServer2 = retrieveRecord(getDatabaseURL(serverInstance.get(1)), "R001");
     ODocument r1onServer3 = retrieveRecord(getDatabaseURL(serverInstance.get(2)), "R001");
 
-    ODatabaseRecordThreadLocal.INSTANCE.set(dbServer1);
+    ODatabaseRecordThreadLocal.instance().set(dbServer1);
     r1onServer1.reload();
-    ODatabaseRecordThreadLocal.INSTANCE.set(dbServer2);
+    ODatabaseRecordThreadLocal.instance().set(dbServer2);
     r1onServer2.reload();
-    ODatabaseRecordThreadLocal.INSTANCE.set(dbServer3);
+    ODatabaseRecordThreadLocal.instance().set(dbServer3);
     r1onServer3.reload();
 
     /**
@@ -312,40 +312,4 @@ public class WWConflictAndNodeInDeadlockScenarioTest extends AbstractScenarioTes
   public String getDatabaseName() {
     return "distributed-wwconflict-deadlock";
   }
-
-  //
-  // /*
-  // * A task representing a client that updates the value of the record with a specific id.
-  // */
-  //
-  // protected class RecordWriter implements Callable<Void> {
-  //
-  // private String dbServerUrl;
-  // private ODocument recordToUpdate;
-  // private String firstName;
-  // private String lastName;
-  //
-  // protected RecordWriter(String dbServerUrl, ODocument recordToUpdate, String firstName, String lastName) {
-  // this.dbServerUrl = dbServerUrl;
-  // this.recordToUpdate = recordToUpdate;
-  // this.firstName = firstName;
-  // this.lastName = lastName;
-  // }
-  //
-  // @Override
-  // public Void call() throws Exception {
-  //
-  // // open server1 db
-  // ODatabaseDocumentTx dbServer = poolFactory.get(dbServerUrl, "admin", "admin").acquire();
-  //
-  // // updating the record
-  // ODatabaseRecordThreadLocal.INSTANCE.set(dbServer);
-  // this.recordToUpdate.field("firstName",this.firstName);
-  // this.recordToUpdate.field("lastName",this.lastName);
-  // this.recordToUpdate.save();
-  //
-  // return null;
-  // }
-  // }
-
 }

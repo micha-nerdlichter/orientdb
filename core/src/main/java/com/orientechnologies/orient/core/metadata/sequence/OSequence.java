@@ -19,12 +19,10 @@
  */
 package com.orientechnologies.orient.core.metadata.sequence;
 
-import java.util.Random;
-import java.util.concurrent.Callable;
-
 import com.orientechnologies.common.exception.OException;
 import com.orientechnologies.common.util.OApi;
 import com.orientechnologies.orient.core.config.OGlobalConfiguration;
+import com.orientechnologies.orient.core.db.ODatabase;
 import com.orientechnologies.orient.core.db.ODatabaseDocumentInternal;
 import com.orientechnologies.orient.core.db.ODatabaseRecordThreadLocal;
 import com.orientechnologies.orient.core.exception.OConcurrentModificationException;
@@ -34,27 +32,30 @@ import com.orientechnologies.orient.core.metadata.schema.OClassImpl;
 import com.orientechnologies.orient.core.metadata.schema.OType;
 import com.orientechnologies.orient.core.record.impl.ODocument;
 
+import java.util.Random;
+import java.util.concurrent.Callable;
+
 /**
  * @author Matan Shukry (matanshukry@gmail.com)
  * @since 3/2/2015
  */
 public abstract class OSequence {
-  public static final long       DEFAULT_START     = 0;
-  public static final int        DEFAULT_INCREMENT = 1;
-  public static final int        DEFAULT_CACHE     = 20;
+  public static final long DEFAULT_START     = 0;
+  public static final int  DEFAULT_INCREMENT = 1;
+  public static final int  DEFAULT_CACHE     = 20;
 
-  protected static final int     DEF_MAX_RETRY     = OGlobalConfiguration.SEQUENCE_MAX_RETRY.getValueAsInteger();
-  public static final String     CLASS_NAME        = "OSequence";
+  protected static final int    DEF_MAX_RETRY = OGlobalConfiguration.SEQUENCE_MAX_RETRY.getValueAsInteger();
+  public static final    String CLASS_NAME    = "OSequence";
 
-  private static final String    FIELD_START       = "start";
-  private static final String    FIELD_INCREMENT   = "incr";
-  private static final String    FIELD_VALUE       = "value";
+  private static final String FIELD_START     = "start";
+  private static final String FIELD_INCREMENT = "incr";
+  private static final String FIELD_VALUE     = "value";
 
-  private static final String    FIELD_NAME        = "name";
-  private static final String    FIELD_TYPE        = "type";
+  private static final String FIELD_NAME = "name";
+  private static final String FIELD_TYPE = "type";
 
-  private ODocument              document;
-  private ThreadLocal<ODocument> tlDocument        = new ThreadLocal<ODocument>();
+  private ODocument document;
+  private ThreadLocal<ODocument> tlDocument = new ThreadLocal<ODocument>();
 
   public static class CreateParams {
     public Long    start     = DEFAULT_START;
@@ -117,8 +118,14 @@ public abstract class OSequence {
     }
   }
 
+  public void save(ODatabase db) {
+    ODocument doc = tlDocument.get();
+    db.save(doc);
+    onUpdate(doc);
+  }
+
   public void save() {
-    tlDocument.get().save();
+    save(getDatabase());
   }
 
   void bindOnLocalThread() {
@@ -149,6 +156,9 @@ public abstract class OSequence {
       this.setIncrement(params.increment);
       any = true;
     }
+
+    save();
+    reset();
 
     return any;
   }
@@ -204,7 +214,7 @@ public abstract class OSequence {
   }
 
   protected synchronized ODatabaseDocumentInternal getDatabase() {
-    return ODatabaseRecordThreadLocal.INSTANCE.get();
+    return ODatabaseRecordThreadLocal.instance().get();
   }
 
   public static String getSequenceName(final ODocument iDocument) {
@@ -214,7 +224,7 @@ public abstract class OSequence {
   public static SEQUENCE_TYPE getSequenceType(final ODocument document) {
     String sequenceTypeStr = document.field(FIELD_TYPE);
     if (sequenceTypeStr != null)
-     return SEQUENCE_TYPE.valueOf(sequenceTypeStr);
+      return SEQUENCE_TYPE.valueOf(sequenceTypeStr);
 
     return null;
   }
@@ -251,14 +261,6 @@ public abstract class OSequence {
    */
   public abstract SEQUENCE_TYPE getSequenceType();
 
-  protected void checkForUpdateToLastversion() {
-    final ODocument tlDoc = tlDocument.get();
-    if (tlDoc != null) {
-      if (document.getVersion() > tlDoc.getVersion())
-        tlDocument.set(document);
-    }
-  }
-
   protected void reloadSequence() {
     tlDocument.set(tlDocument.get().reload(null, true));
   }
@@ -266,15 +268,16 @@ public abstract class OSequence {
   protected <T> T callRetry(final Callable<T> callable, final String method) {
     for (int retry = 0; retry < maxRetry; ++retry) {
       try {
+        reloadSequence();
         return callable.call();
-      } catch (OConcurrentModificationException ex) {
+      } catch (OConcurrentModificationException ignore) {
         try {
           Thread.sleep(1 + new Random().nextInt(OGlobalConfiguration.SEQUENCE_RETRY_DELAY.getValueAsInteger()));
-        } catch (InterruptedException e) {
+        } catch (InterruptedException ignored) {
           Thread.currentThread().interrupt();
           break;
         }
-        reloadSequence();
+
       } catch (OStorageException e) {
         if (e.getCause() instanceof OConcurrentModificationException) {
           reloadSequence();
@@ -282,7 +285,7 @@ public abstract class OSequence {
           throw OException
               .wrapException(new OSequenceException("Error in transactional processing of " + getName() + "." + method + "()"), e);
         }
-      } catch (OException ex) {
+      } catch (OException ignore) {
         reloadSequence();
       } catch (Exception e) {
         throw OException
@@ -294,6 +297,7 @@ public abstract class OSequence {
       return callable.call();
     } catch (Exception e) {
       if (e.getCause() instanceof OConcurrentModificationException) {
+        //noinspection ThrowInsideCatchBlockWhichIgnoresCaughtException
         throw ((OConcurrentModificationException) e.getCause());
       }
       throw OException

@@ -77,7 +77,7 @@ public enum OGlobalConfiguration {
   DIRECT_MEMORY_TRACK_MODE("memory.directMemory.trackMode",
       "Activates the direct memory pool [leak detector](Leak-Detector.md). This detector causes a large overhead and should be used for debugging "
           + "purposes only. It's also a good idea to pass the "
-          + "-Djava.util.logging.manager=com.orientechnologies.common.log.OLogManager$DebugLogManager switch to the JVM, "
+          + "-Djava.util.logging.manager=com.orientechnologies.common.log.OLogManager$ShutdownLogManager switch to the JVM, "
           + "if you use this mode, this will enable the logging from JVM shutdown hooks.", Boolean.class, false),
 
   DIRECT_MEMORY_ONLY_ALIGNED_ACCESS("memory.directMemory.onlyAlignedMemoryAccess",
@@ -158,8 +158,9 @@ public enum OGlobalConfiguration {
       + "on page flushes, no verification is done on page loads, stored checksums are verified only during user-initiated health "
       + "checks; 'storeAndVerify' (default) – checksums are calculated and stored on page flushes, verification is performed on "
       + "each page load, errors are reported in the log; 'storeAndThrow' – same as `storeAndVerify` with addition of exceptions "
-      + "thrown on errors, this mode is useful for debugging and testing, but should be avoided in a production environment.",
-      OChecksumMode.class, OChecksumMode.StoreAndVerify, false),
+      + "thrown on errors, this mode is useful for debugging and testing, but should be avoided in a production environment;"
+      + " 'storeAndSwitchReadOnlyMode' (default) - Same as 'storeAndVerify' with addition that storage will be switched in read only mode "
+      + "till it will not be repaired.", OChecksumMode.class, OChecksumMode.StoreAndSwitchReadOnlyMode, false),
 
   STORAGE_CONFIGURATION_SYNC_ON_UPDATE("storage.configuration.syncOnUpdate",
       "Indicates a force sync should be performed for each update on the storage configuration", Boolean.class, true),
@@ -178,9 +179,14 @@ public enum OGlobalConfiguration {
   STORAGE_MAKE_FULL_CHECKPOINT_AFTER_CREATE("storage.makeFullCheckpointAfterCreate",
       "Indicates whether a full checkpoint should be performed, if storage was created", Boolean.class, false),
 
-  STORAGE_MAKE_FULL_CHECKPOINT_AFTER_OPEN("storage.makeFullCheckpointAfterOpen",
+  /**
+   * @deprecated because it was used as workaround for the case when storage is already opened but there are no checkpoints and as
+   * result data restore after crash may work incorrectly, this bug is fixed under https://github.com/orientechnologies/orientdb/issues/7562
+   * in so this functionality is not needed any more.
+   */
+  @Deprecated STORAGE_MAKE_FULL_CHECKPOINT_AFTER_OPEN("storage.makeFullCheckpointAfterOpen",
       "Indicates whether a full checkpoint should be performed, if storage was opened. It is needed so fuzzy checkpoints can work properly",
-      Boolean.class, true),
+      Boolean.class, false),
 
   STORAGE_MAKE_FULL_CHECKPOINT_AFTER_CLUSTER_CREATE("storage.makeFullCheckpointAfterClusterCreate",
       "Indicates whether a full checkpoint should be performed, if storage was opened", Boolean.class, true),
@@ -413,6 +419,9 @@ public enum OGlobalConfiguration {
   NETWORK_REQUEST_TIMEOUT("network.requestTimeout", "Request completion timeout (in ms)", Integer.class, 3600000 /* one hour */,
       true),
 
+  NETWORK_SOCKET_RETRY_STRATEGY("network.retry.strategy",
+      "Select the retry server selection strategy, possible values are auto,same-dc ", String.class, "auto", true),
+
   NETWORK_SOCKET_RETRY("network.retry", "Number of attempts to connect to the server on failure", Integer.class, 5, true),
 
   NETWORK_SOCKET_RETRY_DELAY("network.retryDelay",
@@ -497,6 +506,11 @@ public enum OGlobalConfiguration {
       Orient.instance().getProfiler().setAutoDump((Integer) iNewValue);
     }
   }),
+
+  /**
+   * @Since 2.2.27
+   */
+  PROFILER_AUTODUMP_TYPE("profiler.autoDump.type", "Type of profiler dump between 'full' or 'performance'", String.class, "full"),
 
   PROFILER_MAXVALUES("profiler.maxValues", "Maximum values to store. Values are managed in a LRU", Integer.class, 200),
 
@@ -587,8 +601,11 @@ public enum OGlobalConfiguration {
 
   QUERY_LIVE_SUPPORT("query.live.support", "Enable/Disable the support of live query. (Use false to disable)", Boolean.class, true),
 
-  LUCENE_QUERY_PAGE_SIZE("lucene.query.pageSize",
-      "Size of the page when fetching data from a lucene index", Long.class, 10000,true),
+  QUERY_TIMEOUT_DEFAULT_STRATEGY("query.timeout.defaultStrategy",
+      "Default timeout strategy for queries (can be RETURN or EXCEPTION)", String.class, "EXCEPTION"),
+
+  LUCENE_QUERY_PAGE_SIZE("lucene.query.pageSize", "Size of the page when fetching data from a lucene index", Long.class, 10000,
+      true),
 
   STATEMENT_CACHE_SIZE("statement.cacheSize", "Number of parsed SQL statements kept in cache", Integer.class, 100),
 
@@ -643,7 +660,6 @@ public enum OGlobalConfiguration {
       "Dumps the full stack trace of the exception sent to the client", Boolean.class, Boolean.FALSE, true),
 
   // DISTRIBUTED
-
   /**
    * @Since 2.2.18
    */
@@ -669,7 +685,7 @@ public enum OGlobalConfiguration {
       "Maximum timeout (in ms) to wait for database deployment", Long.class, 1200000l, true),
 
   DISTRIBUTED_DEPLOYCHUNK_TASK_SYNCH_TIMEOUT("distributed.deployChunkTaskTimeout",
-      "Maximum timeout (in ms) to wait for database chunk deployment", Long.class, 15000l, true),
+      "Maximum timeout (in ms) to wait for database chunk deployment", Long.class, 60000l, true),
 
   DISTRIBUTED_DEPLOYDB_TASK_COMPRESSION("distributed.deployDbTaskCompression",
       "Compression level (between 0 and 9) to use in backup for database deployment", Integer.class, 7, true),
@@ -722,6 +738,9 @@ public enum OGlobalConfiguration {
   DISTRIBUTED_RESPONSE_CHANNELS("distributed.responseChannels", "Number of network channels used to send responses", Integer.class,
       1),
 
+  DISTRIBUTED_QUEUE_TIMEOUT("distributed.queueTimeout", "Maximum timeout (in ms) to wait when the replication queue is full",
+      Long.class, 15000l, true),
+
   /**
    * @Since 2.2.5
    */
@@ -758,52 +777,59 @@ public enum OGlobalConfiguration {
   /**
    * @Since 2.2.0
    */
-  @OApi(maturity = OApi.MATURITY.NEW)DISTRIBUTED_LOCAL_QUEUESIZE("distributed.localQueueSize",
+  @OApi(maturity = OApi.MATURITY.NEW) DISTRIBUTED_LOCAL_QUEUESIZE("distributed.localQueueSize",
       "Size of the intra-thread queue for distributed messages", Integer.class, 10000),
 
   /**
    * @Since 2.2.0
    */
-  @OApi(maturity = OApi.MATURITY.NEW)DISTRIBUTED_DB_WORKERTHREADS("distributed.dbWorkerThreads",
-      "Number of parallel worker threads per database that process distributed messages", Integer.class, 8),
+  @OApi(maturity = OApi.MATURITY.NEW) DISTRIBUTED_DB_WORKERTHREADS("distributed.dbWorkerThreads",
+      "Number of parallel worker threads per database that process distributed messages. Use 0 for automatic", Integer.class, 0),
 
   /**
    * @Since 2.1.3, Deprecated in 2.2.0
    */
-  @Deprecated @OApi(maturity = OApi.MATURITY.NEW)DISTRIBUTED_QUEUE_MAXSIZE("distributed.queueMaxSize",
+  @Deprecated @OApi(maturity = OApi.MATURITY.NEW) DISTRIBUTED_QUEUE_MAXSIZE("distributed.queueMaxSize",
       "Maximum queue size to mark a node as stalled. If the number of messages in queue are more than this values, the node is restarted with a remote command (0 = no maximum, which means up to 2^31-1 entries)",
       Integer.class, 10000),
 
   /**
    * @Since 2.1.3
    */
-  @OApi(maturity = OApi.MATURITY.NEW)DISTRIBUTED_BACKUP_DIRECTORY("distributed.backupDirectory",
+  @OApi(maturity = OApi.MATURITY.NEW) DISTRIBUTED_BACKUP_DIRECTORY("distributed.backupDirectory",
       "Directory where the copy of an existent database is saved, before it is downloaded from the cluster. Leave it empty to avoid the backup.",
       String.class, "../backup/databases"),
 
   /**
    * @Since 2.2.15
    */
-  @OApi(maturity = OApi.MATURITY.NEW)DISTRIBUTED_BACKUP_TRY_INCREMENTAL_FIRST("distributed.backupTryIncrementalFirst",
+  @OApi(maturity = OApi.MATURITY.STABLE) DISTRIBUTED_BACKUP_TRY_INCREMENTAL_FIRST("distributed.backupTryIncrementalFirst",
       "Try to execute an incremental backup first.", Boolean.class, true),
+
+  /**
+   * @Since 2.2.27
+   */
+  @OApi(maturity = OApi.MATURITY.NEW) DISTRIBUTED_CHECKINTEGRITY_LAST_TX("distributed.checkIntegrityLastTxs",
+      "Before asking for a delta sync, checks the integrity of the records touched by the last X transactions committed on local server.",
+      Integer.class, 16),
 
   /**
    * @Since 2.1
    */
-  @OApi(maturity = OApi.MATURITY.NEW)DISTRIBUTED_CONCURRENT_TX_MAX_AUTORETRY("distributed.concurrentTxMaxAutoRetry",
+  @OApi(maturity = OApi.MATURITY.NEW) DISTRIBUTED_CONCURRENT_TX_MAX_AUTORETRY("distributed.concurrentTxMaxAutoRetry",
       "Maximum attempts the transaction coordinator should execute a transaction automatically, if records are locked. (Minimum is 1 = no attempts)",
       Integer.class, 10, true),
 
   /**
    * @Since 2.2.7
    */
-  @OApi(maturity = OApi.MATURITY.NEW)DISTRIBUTED_ATOMIC_LOCK_TIMEOUT("distributed.atomicLockTimeout",
+  @OApi(maturity = OApi.MATURITY.NEW) DISTRIBUTED_ATOMIC_LOCK_TIMEOUT("distributed.atomicLockTimeout",
       "Timeout (in ms) to acquire a distributed lock on a record. (0=infinite)", Integer.class, 50, true),
 
   /**
    * @Since 2.1
    */
-  @OApi(maturity = OApi.MATURITY.NEW)DISTRIBUTED_CONCURRENT_TX_AUTORETRY_DELAY("distributed.concurrentTxAutoRetryDelay",
+  @OApi(maturity = OApi.MATURITY.NEW) DISTRIBUTED_CONCURRENT_TX_AUTORETRY_DELAY("distributed.concurrentTxAutoRetryDelay",
       "Delay (in ms) between attempts on executing a distributed transaction, which had failed because of locked records. (0=no delay)",
       Integer.class, 10, true),
 
@@ -813,49 +839,49 @@ public enum OGlobalConfiguration {
   /**
    * @Since 2.2
    */
-  @OApi(maturity = OApi.MATURITY.NEW)CLIENT_KRB5_CONFIG("client.krb5.config", "Location of the Kerberos configuration file",
+  @OApi(maturity = OApi.MATURITY.NEW) CLIENT_KRB5_CONFIG("client.krb5.config", "Location of the Kerberos configuration file",
       String.class, null),
 
   /**
    * @Since 2.2
    */
-  @OApi(maturity = OApi.MATURITY.NEW)CLIENT_KRB5_CCNAME("client.krb5.ccname", "Location of the Kerberos client ticketcache",
+  @OApi(maturity = OApi.MATURITY.NEW) CLIENT_KRB5_CCNAME("client.krb5.ccname", "Location of the Kerberos client ticketcache",
       String.class, null),
 
   /**
    * @Since 2.2
    */
-  @OApi(maturity = OApi.MATURITY.NEW)CLIENT_KRB5_KTNAME("client.krb5.ktname", "Location of the Kerberos client keytab",
+  @OApi(maturity = OApi.MATURITY.NEW) CLIENT_KRB5_KTNAME("client.krb5.ktname", "Location of the Kerberos client keytab",
       String.class, null),
 
   /**
    * @Since 2.2
    */
-  @OApi(maturity = OApi.MATURITY.NEW)CLIENT_CREDENTIAL_INTERCEPTOR("client.credentialinterceptor",
+  @OApi(maturity = OApi.MATURITY.NEW) CLIENT_CREDENTIAL_INTERCEPTOR("client.credentialinterceptor",
       "The name of the CredentialInterceptor class", String.class, null),
 
-  @OApi(maturity = OApi.MATURITY.NEW)CLIENT_CI_KEYALGORITHM("client.ci.keyalgorithm",
+  @OApi(maturity = OApi.MATURITY.NEW) CLIENT_CI_KEYALGORITHM("client.ci.keyalgorithm",
       "The key algorithm used by the symmetric key credential interceptor", String.class, "AES"),
 
-  @OApi(maturity = OApi.MATURITY.NEW)CLIENT_CI_CIPHERTRANSFORM("client.ci.ciphertransform",
+  @OApi(maturity = OApi.MATURITY.NEW) CLIENT_CI_CIPHERTRANSFORM("client.ci.ciphertransform",
       "The cipher transformation used by the symmetric key credential interceptor", String.class, "AES/CBC/PKCS5Padding"),
 
-  @OApi(maturity = OApi.MATURITY.NEW)CLIENT_CI_KEYSTORE_FILE("client.ci.keystore.file",
+  @OApi(maturity = OApi.MATURITY.NEW) CLIENT_CI_KEYSTORE_FILE("client.ci.keystore.file",
       "The file path of the keystore used by the symmetric key credential interceptor", String.class, null),
 
-  @OApi(maturity = OApi.MATURITY.NEW)CLIENT_CI_KEYSTORE_PASSWORD("client.ci.keystore.password",
+  @OApi(maturity = OApi.MATURITY.NEW) CLIENT_CI_KEYSTORE_PASSWORD("client.ci.keystore.password",
       "The password of the keystore used by the symmetric key credential interceptor", String.class, null),
 
   /**
    * @Since 2.2
    */
-  @OApi(maturity = OApi.MATURITY.NEW)CREATE_DEFAULT_USERS("security.createDefaultUsers",
+  @OApi(maturity = OApi.MATURITY.NEW) CREATE_DEFAULT_USERS("security.createDefaultUsers",
       "Indicates whether default database users should be created", Boolean.class, true),
 
   /**
    * @Since 2.2
    */
-  @OApi(maturity = OApi.MATURITY.NEW)SERVER_SECURITY_FILE("server.security.file",
+  @OApi(maturity = OApi.MATURITY.NEW) SERVER_SECURITY_FILE("server.security.file",
       "Location of the OrientDB security.json configuration file", String.class, null),
 
   /**
@@ -864,9 +890,6 @@ public enum OGlobalConfiguration {
   @Deprecated JNA_DISABLE_USE_SYSTEM_LIBRARY("jna.disable.system.library",
       "This property disables using JNA, should it be installed on your system. (Default true) To use JNA bundled with database",
       boolean.class, true),
-
-  @Deprecated DISTRIBUTED_QUEUE_TIMEOUT("distributed.queueTimeout",
-      "Maximum timeout (in ms) to wait for the response in replication", Long.class, 500000l, true),
 
   @Deprecated DB_MAKE_FULL_CHECKPOINT_ON_INDEX_CHANGE("db.makeFullCheckpointOnIndexChange",
       "When index metadata is changed, a full checkpoint is performed", Boolean.class, true, true),
@@ -948,10 +971,15 @@ public enum OGlobalConfiguration {
   @Deprecated CACHE_LOCAL_ENABLED("cache.local.enabled", "Deprecated, Level1 cache cannot be disabled anymore", Boolean.class,
       true);
 
+  /**
+   * Place holder for the "undefined" value of setting.
+   */
+  private final Object nullValue = new Object();
+
   private final String   key;
   private final Object   defValue;
   private final Class<?> type;
-  private volatile Object value = null;
+  private volatile Object value = nullValue;
   private final String                       description;
   private final OConfigurationChangeCallback changeCallback;
   private final Boolean                      canChangeAtRuntime;
@@ -1009,7 +1037,7 @@ public enum OGlobalConfiguration {
       out.print("  + ");
       out.print(v.key);
       out.print(" = ");
-      out.println(v.isHidden() ? "<hidden>" : v.getValue());
+      out.println(v.isHidden() ? "<hidden>" : String.valueOf((Object) v.getValue()));
     }
   }
 
@@ -1060,7 +1088,37 @@ public enum OGlobalConfiguration {
 
   public <T> T getValue() {
     //noinspection unchecked
-    return (T) (value != null ? value : defValue);
+    return (T) (value != nullValue && value != null ? value : defValue);
+  }
+
+  /**
+   * @return <code>true</code> if configuration was changed from default value and <code>false</code> otherwise.
+   */
+  public boolean isChanged() {
+    return value != nullValue;
+  }
+
+  /**
+   * @return Value of configuration parameter stored as enumeration if such one exists.
+   *
+   * @throws ClassCastException       if stored value can not be casted and parsed from string to passed in enumeration class.
+   * @throws IllegalArgumentException if value associated with configuration parameter is a string bug can not be converted to
+   *                                  instance of passed in enumeration class.
+   */
+  public <T extends Enum<T>> T getValueAsEnum(Class<T> enumType) {
+    final Object value = getValue();
+
+    if (value == null)
+      return null;
+
+    if (enumType.isAssignableFrom(value.getClass())) {
+      return enumType.cast(value);
+    } else if (value instanceof String) {
+      final String presentation = value.toString();
+      return Enum.valueOf(enumType, presentation);
+    } else {
+      throw new ClassCastException("Value " + value + " can not be cast to enumeration " + enumType.getSimpleName());
+    }
   }
 
   public void setValue(final Object iValue) {
@@ -1102,34 +1160,34 @@ public enum OGlobalConfiguration {
 
     if (changeCallback != null) {
       try {
-        changeCallback.change(oldValue, value);
+        changeCallback.change(oldValue == nullValue ? null : oldValue, value == nullValue ? null : value);
       } catch (Exception e) {
-        e.printStackTrace();
+        OLogManager.instance().error(this, "Error during call of 'change callback'", e);
       }
     }
   }
 
   public boolean getValueAsBoolean() {
-    final Object v = value != null ? value : defValue;
+    final Object v = value != nullValue && value != null ? value : defValue;
     return v instanceof Boolean ? (Boolean) v : Boolean.parseBoolean(v.toString());
   }
 
   public String getValueAsString() {
-    return value != null ? value.toString() : defValue != null ? defValue.toString() : null;
+    return value != nullValue && value != null ? value.toString() : defValue != null ? defValue.toString() : null;
   }
 
   public int getValueAsInteger() {
-    final Object v = value != null ? value : defValue;
+    final Object v = value != nullValue && value != null ? value : defValue;
     return (int) (v instanceof Number ? ((Number) v).intValue() : OFileUtils.getSizeAsNumber(v.toString()));
   }
 
   public long getValueAsLong() {
-    final Object v = value != null ? value : defValue;
+    final Object v = value != nullValue && value != null ? value : defValue;
     return v instanceof Number ? ((Number) v).longValue() : OFileUtils.getSizeAsNumber(v.toString());
   }
 
   public float getValueAsFloat() {
-    final Object v = value != null ? value : defValue;
+    final Object v = value != nullValue && value != null ? value : defValue;
     return v instanceof Float ? (Float) v : Float.parseFloat(v.toString());
   }
 

@@ -52,10 +52,10 @@ import java.util.*;
 
 public class OLuceneFullTextIndexEngine extends OLuceneIndexEngineAbstract {
 
-  protected OLuceneFacetManager facetManager;
-  private OLuceneDocumentBuilder builder;
-  private OLuceneQueryBuilder queryBuilder;
-  private Query queryOriginal;
+  protected OLuceneFacetManager     facetManager;
+  private   OLuceneDocumentBuilder  builder;
+  private   OLuceneQueryBuilder     queryBuilder;
+  private   Query                   queryOriginal;
 
   public OLuceneFullTextIndexEngine(OStorage storage, String idxName) {
     super(storage, idxName);
@@ -104,6 +104,8 @@ public class OLuceneFullTextIndexEngine extends OLuceneIndexEngineAbstract {
   @Override
   public void onRecordAddedToResultSet(final OLuceneQueryContext queryContext, final OContextualRecordId recordId, Document ret,
                                        final ScoreDoc score) {
+    updateLastAccess();
+    openIfClosed();
     final OLuceneHits hits = new OLuceneHits(queryContext, score, queryOriginal);
     recordId.setContext(new HashMap<String, Object>() {
       {
@@ -132,6 +134,9 @@ public class OLuceneFullTextIndexEngine extends OLuceneIndexEngineAbstract {
 
   @Override
   public void put(Object key, Object value) {
+    updateLastAccess();
+    openIfClosed();
+
     Collection<OIdentifiable> container = (Collection<OIdentifiable>) value;
     for (OIdentifiable oIdentifiable : container) {
 
@@ -139,7 +144,7 @@ public class OLuceneFullTextIndexEngine extends OLuceneIndexEngineAbstract {
       if (index.isAutomatic()) {
         doc = buildDocument(key, oIdentifiable);
       } else {
-        doc = putInManualindex(key, oIdentifiable);
+        doc = putInManualIndex(key, oIdentifiable);
       }
 
       if (facetManager.supportsFacets()) {
@@ -155,7 +160,7 @@ public class OLuceneFullTextIndexEngine extends OLuceneIndexEngineAbstract {
       }
 
       if (!index.isAutomatic()) {
-        commit();
+        flush();
       }
     }
   }
@@ -177,7 +182,7 @@ public class OLuceneFullTextIndexEngine extends OLuceneIndexEngineAbstract {
 
   @Override
   public OIndexCursor iterateEntriesBetween(Object rangeFrom, boolean fromInclusive, Object rangeTo, boolean toInclusive,
-                                            boolean ascSortOrder, ValuesTransformer transformer) {
+      boolean ascSortOrder, ValuesTransformer transformer) {
     return new LuceneIndexCursor((OLuceneResultSet) get(rangeFrom), rangeFrom);
   }
 
@@ -198,7 +203,7 @@ public class OLuceneFullTextIndexEngine extends OLuceneIndexEngineAbstract {
 
   @Override
   public OIndexCursor iterateEntriesMajor(Object fromKey, boolean isInclusive, boolean ascSortOrder,
-                                          ValuesTransformer transformer) {
+      ValuesTransformer transformer) {
     return null;
   }
 
@@ -217,11 +222,11 @@ public class OLuceneFullTextIndexEngine extends OLuceneIndexEngineAbstract {
     if (index.isAutomatic()) {
       return builder.build(index, key, value, collectionFields, metadata);
     } else {
-      return putInManualindex(key, value);
+      return putInManualIndex(key, value);
     }
   }
 
-  private Document putInManualindex(Object key, OIdentifiable oIdentifiable) {
+  private Document putInManualIndex(Object key, OIdentifiable oIdentifiable) {
     Document doc = new Document();
     doc.add(OLuceneIndexType.createField(RID, oIdentifiable.getIdentity().toString(), Field.Store.YES));
 
@@ -261,6 +266,9 @@ public class OLuceneFullTextIndexEngine extends OLuceneIndexEngineAbstract {
 
   @Override
   public Object getInTx(Object key, OLuceneTxChanges changes) {
+    updateLastAccess();
+    openIfClosed();
+
     try {
       Analyzer termsAnalyzer = (new OLuceneAnalyzerFactory()).createAnalyzer(
         index,
@@ -281,8 +289,8 @@ public class OLuceneFullTextIndexEngine extends OLuceneIndexEngineAbstract {
 
   public class LuceneIndexCursor implements OIndexCursor {
 
-    private final Object key;
-    private OLuceneResultSet resultSet;
+    private final Object           key;
+    private       OLuceneResultSet resultSet;
 
     private Iterator<OIdentifiable> iterator;
 

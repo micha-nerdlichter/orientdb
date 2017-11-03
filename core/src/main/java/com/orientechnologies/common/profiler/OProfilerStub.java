@@ -25,7 +25,6 @@ import com.googlecode.concurrentlinkedhashmap.ConcurrentLinkedHashMap;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Date;
-import java.util.HashMap;
 import java.util.List;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -34,12 +33,9 @@ import static com.orientechnologies.orient.core.config.OGlobalConfiguration.PROF
 
 public class OProfilerStub extends OAbstractProfiler {
 
-  protected  ConcurrentMap<String, Long>                    counters      = new ConcurrentLinkedHashMap.Builder().maximumWeightedCapacity(
-      PROFILER_MAXVALUES.getValueAsInteger()).build();
-  private    ConcurrentLinkedHashMap<String, AtomicInteger> tips          = new ConcurrentLinkedHashMap.Builder().maximumWeightedCapacity(
-      PROFILER_MAXVALUES.getValueAsInteger()).build();
-  private    ConcurrentLinkedHashMap<String, Long>          tipsTimestamp = new ConcurrentLinkedHashMap.Builder().maximumWeightedCapacity(
-      PROFILER_MAXVALUES.getValueAsInteger()).build();
+  protected volatile ConcurrentMap<String, Long>                    counters;
+  private   volatile ConcurrentLinkedHashMap<String, AtomicInteger> tips;
+  private   volatile ConcurrentLinkedHashMap<String, Long>          tipsTimestamp;
 
   public OProfilerStub() {
   }
@@ -49,13 +45,38 @@ public class OProfilerStub extends OAbstractProfiler {
   }
 
   @Override
+  public void startup() {
+    counters = new ConcurrentLinkedHashMap.Builder().maximumWeightedCapacity(PROFILER_MAXVALUES.getValueAsInteger()).build();
+    tips = new ConcurrentLinkedHashMap.Builder().maximumWeightedCapacity(PROFILER_MAXVALUES.getValueAsInteger()).build();
+    tipsTimestamp = new ConcurrentLinkedHashMap.Builder().maximumWeightedCapacity(PROFILER_MAXVALUES.getValueAsInteger()).build();
+    super.startup();
+  }
+
+  @Override
+  public void shutdown() {
+    counters.clear();
+    tips.clear();
+    tipsTimestamp.clear();
+    super.shutdown();
+  }
+
+  @Override
   protected void setTip(final String iMessage, final AtomicInteger counter) {
+    if(!isRecording())
+      return;
+
     tips.put(iMessage, counter);
     tipsTimestamp.put(iMessage, System.currentTimeMillis());
   }
 
   @Override
   protected AtomicInteger getTip(final String iMessage) {
+    if (!isRecording())
+      return null;
+
+    if (iMessage == null)
+      return null;
+
     return tips.get(iMessage);
   }
 
@@ -75,12 +96,9 @@ public class OProfilerStub extends OAbstractProfiler {
   }
 
   public boolean startRecording() {
-    counters = new ConcurrentLinkedHashMap.Builder()
-        .maximumWeightedCapacity(PROFILER_MAXVALUES.getValueAsInteger()).build();
-    tips = new ConcurrentLinkedHashMap.Builder()
-        .maximumWeightedCapacity(PROFILER_MAXVALUES.getValueAsInteger()).build();
-    tipsTimestamp = new ConcurrentLinkedHashMap.Builder()
-        .maximumWeightedCapacity(PROFILER_MAXVALUES.getValueAsInteger()).build();
+    counters = new ConcurrentLinkedHashMap.Builder().maximumWeightedCapacity(PROFILER_MAXVALUES.getValueAsInteger()).build();
+    tips = new ConcurrentLinkedHashMap.Builder().maximumWeightedCapacity(PROFILER_MAXVALUES.getValueAsInteger()).build();
+    tipsTimestamp = new ConcurrentLinkedHashMap.Builder().maximumWeightedCapacity(PROFILER_MAXVALUES.getValueAsInteger()).build();
 
     if (super.startRecording()) {
       counters.clear();
@@ -196,12 +214,14 @@ public class OProfilerStub extends OAbstractProfiler {
 
   @Override
   public String[] getCountersAsString() {
-    return null;
+    final List<String> keys = new ArrayList<String>(counters.keySet());
+    final String[] result = new String[keys.size()];
+    return keys.toArray(result);
   }
 
   @Override
-  public String[] getChronosAsString() {
-    return null;
+  public List<String> getChronos() {
+    return Collections.emptyList();
   }
 
   @Override
@@ -215,12 +235,22 @@ public class OProfilerStub extends OAbstractProfiler {
   }
 
   @Override
+  public Object getHookValue(final String iName) {
+    return null;
+  }
+
+  @Override
   public String toJSON(String command, final String iPar1) {
     return null;
   }
 
   @Override
   public void resetRealtime(String iText) {
+  }
+
+  @Override
+  public String getStatsAsJson() {
+    return null;
   }
 
   /**

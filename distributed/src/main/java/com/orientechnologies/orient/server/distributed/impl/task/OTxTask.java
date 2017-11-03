@@ -60,7 +60,7 @@ public class OTxTask extends OAbstract2pcTask {
         .debug(this, iManager.getLocalNodeName(), getNodeSource(), DIRECTION.IN, "Executing transaction db=%s (reqId=%s)...",
             database.getName(), requestId);
 
-    ODatabaseRecordThreadLocal.INSTANCE.set(database);
+    ODatabaseRecordThreadLocal.instance().set(database);
 
     final ODistributedDatabase ddb = iManager.getMessageService().getDatabase(database.getName());
 
@@ -147,12 +147,6 @@ public class OTxTask extends OAbstract2pcTask {
           "Rolling back transaction on local server db=%s (reqId=%s error=%s)...", database.getName(), requestId, e);
 
       database.rollback();
-
-      // KEEP THE LOCKS WAITING FOR THE FINAL MSG FROM THE COORDINATOR
-
-//      // REMOVE THE CONTEXT
-//      ddb.popTxContext(requestId);
-//      reqContext.destroy();
 
       // ALREADY ROLLED BACK (ON STORAGE), REMOVE UNDO TASKS
       reqContext.clearUndo();

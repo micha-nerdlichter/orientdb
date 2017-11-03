@@ -9,9 +9,7 @@ import org.apache.lucene.document.DateTools;
 import org.junit.Before;
 import org.junit.Test;
 
-import java.util.Arrays;
-import java.util.Collection;
-import java.util.List;
+import java.util.*;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -24,17 +22,31 @@ public class LuceneRangeTest extends BaseLuceneTest {
   public void setUp() throws Exception {
     OSchemaProxy schema = db.getMetadata().getSchema();
 
+    db.command(new OCommandSQL("alter database TIMEZONE 'GMT'")).execute();
+
     OClass cls = schema.createClass("Person");
     cls.createProperty("name", OType.STRING);
     cls.createProperty("surname", OType.STRING);
     cls.createProperty("date", OType.DATETIME);
     cls.createProperty("age", OType.INTEGER);
+    cls.createProperty("weight", OType.FLOAT);
 
     List<String> names = Arrays.asList("John", "Robert", "Jane", "andrew", "Scott", "luke", "Enriquez", "Luis", "Gabriel", "Sara");
+
+    Calendar cal = Calendar.getInstance(TimeZone.getTimeZone("GMT"));
+
     for (int i = 0; i < 10; i++) {
-      db.save(new ODocument("Person").field("name", names.get(i)).field("surname", "Reese")
+
+      cal.add(Calendar.DAY_OF_WEEK, -1);
+
+      ODocument record = new ODocument("Person")
+          .field("name", names.get(i))
+          .field("surname", "Reese")
           //from today back one day a time
-          .field("date", System.currentTimeMillis() - (i * 3600 * 24 * 1000)).field("age", i));
+          .field("date", cal.getTimeInMillis())
+          .field("age", i)
+          .field("weight", i + 0.1f);
+      db.save(record);
     }
 
   }
@@ -56,6 +68,25 @@ public class LuceneRangeTest extends BaseLuceneTest {
 
     assertThat(results).hasSize(1);
   }
+
+  @Test
+  public void shouldUseRangeQueryOnSingleFloatField() throws Exception {
+
+    db.command(new OCommandSQL("create index Person.weight on Person(weight) FULLTEXT ENGINE LUCENE")).execute();
+
+    assertThat(db.getMetadata().getIndexManager().getIndex("Person.weight").getSize()).isEqualTo(10);
+
+    //range
+    Collection<ODocument> results = db.command(new OCommandSQL("SELECT FROM Person WHERE weight  LUCENE 'weight :[0 TO 1.1]'")).execute();
+
+    assertThat(results).hasSize(2);
+
+    //single value
+    results = db.command(new OCommandSQL("SELECT FROM Person WHERE weight  LUCENE 'weight:7.1'")).execute();
+
+    assertThat(results).hasSize(1);
+  }
+
 
   @Test
   public void shouldUseRangeQueryOnSingleDateField() throws Exception {
@@ -86,8 +117,13 @@ public class LuceneRangeTest extends BaseLuceneTest {
 
     db.commit();
 
-    String today = DateTools.timeToString(System.currentTimeMillis(), DateTools.Resolution.MINUTE);
-    String fiveDaysAgo = DateTools.timeToString(System.currentTimeMillis() - (5 * 3600 * 24 * 1000), DateTools.Resolution.MINUTE);
+    Calendar cal = Calendar.getInstance(TimeZone.getTimeZone("GMT"));
+
+    Date todayDate = cal.getTime();
+    cal.add(Calendar.DAY_OF_WEEK, -5);
+    Date fiveDaysAgoDate = cal.getTime();
+    String today = DateTools.timeToString(todayDate.getTime(), DateTools.Resolution.MINUTE);
+    String fiveDaysAgo = DateTools.timeToString(fiveDaysAgoDate.getTime(), DateTools.Resolution.MINUTE);
 
     //name and age range
     Collection<ODocument> results = db
@@ -108,7 +144,7 @@ public class LuceneRangeTest extends BaseLuceneTest {
         "SELECT FROM Person WHERE [name,surname,date,age] LUCENE '+age:[4 TO 7]  +date:[" + fiveDaysAgo + " TO " + today + "]'"))
         .execute();
 
-    assertThat(results).hasSize(2);
+    assertThat(results).hasSize(1);
 
   }
 
@@ -120,8 +156,13 @@ public class LuceneRangeTest extends BaseLuceneTest {
 
     db.commit();
 
-    String today = DateTools.timeToString(System.currentTimeMillis(), DateTools.Resolution.MINUTE);
-    String fiveDaysAgo = DateTools.timeToString(System.currentTimeMillis() - (5 * 3600 * 24 * 1000), DateTools.Resolution.MINUTE);
+    Calendar cal = Calendar.getInstance(TimeZone.getTimeZone("GMT"));
+
+    Date todayDate = cal.getTime();
+    cal.add(Calendar.DAY_OF_WEEK, -5);
+    Date fiveDaysAgoDate = cal.getTime();
+    String today = DateTools.timeToString(todayDate.getTime(), DateTools.Resolution.MINUTE);
+    String fiveDaysAgo = DateTools.timeToString(fiveDaysAgoDate.getTime(), DateTools.Resolution.MINUTE);
 
     //anme and age range
     Collection<ODocument> results = db
@@ -140,7 +181,7 @@ public class LuceneRangeTest extends BaseLuceneTest {
     results = db.command(new OCommandSQL(
         "SELECT FROM index:Person.composite WHERE key = '+age:[4 TO 7]  +date:[" + fiveDaysAgo + " TO " + today + "]'")).execute();
 
-    assertThat(results).hasSize(2);
+    assertThat(results).hasSize(1);
 
   }
 
@@ -153,14 +194,14 @@ public class LuceneRangeTest extends BaseLuceneTest {
 
     OClass person = db.getMetadata().getSchema().getClass("Person");
 
-
     int cluster = person.getClusterIds()[1];
 
     Long count = db.countClusterElements(cluster);
 
     db.commit();
 
-    Collection<ODocument> results = db.command(new OCommandSQL("SELECT FROM Person WHERE name LUCENE '+_CLUSTER:" + cluster + "'")).execute();
+    Collection<ODocument> results = db.command(new OCommandSQL("SELECT FROM Person WHERE name LUCENE '+_CLUSTER:" + cluster + "'"))
+        .execute();
 
     assertThat(results).hasSize(count.intValue());
 

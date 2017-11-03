@@ -101,6 +101,7 @@ public class OSchemaShared extends ODocumentWrapperNoClass
     internalClasses.add("otrigger");
     internalClasses.add("oschedule");
     internalClasses.add("orids");
+    internalClasses.add("_studio");
   }
 
   private static final class ClusterIdsAreEmptyException extends Exception {
@@ -235,7 +236,7 @@ public class OSchemaShared extends ODocumentWrapperNoClass
           releaseSchemaWriteLock();
         }
 
-      } catch (ClusterIdsAreEmptyException e) {
+      } catch (ClusterIdsAreEmptyException ignore) {
         clusterIds = createClusters(clazz.getSimpleName());
         retry++;
       }
@@ -305,7 +306,7 @@ public class OSchemaShared extends ODocumentWrapperNoClass
           releaseSchemaWriteLock();
         }
         break;
-      } catch (ClusterIdsAreEmptyException e) {
+      } catch (ClusterIdsAreEmptyException ignore) {
         clusterIds = createClusters(iClassName);
         retry++;
       }
@@ -335,7 +336,7 @@ public class OSchemaShared extends ODocumentWrapperNoClass
         }
 
         break;
-      } catch (ClusterIdsAreEmptyException e) {
+      } catch (ClusterIdsAreEmptyException ignore) {
         clusterIds = createClusters(iClass.getSimpleName());
         retry++;
       }
@@ -377,7 +378,7 @@ public class OSchemaShared extends ODocumentWrapperNoClass
       try {
         result = doCreateClass(className, clusterIds, retry, superClasses);
         break;
-      } catch (ClusterIdsAreEmptyException e) {
+      } catch (ClusterIdsAreEmptyException ignore) {
         classes.remove(className.toLowerCase(Locale.ENGLISH));
         clusterIds = (int[]) OScenarioThreadLocal.executeAsDefault(new Callable<int[]>() {
           @Override
@@ -678,7 +679,8 @@ public class OSchemaShared extends ODocumentWrapperNoClass
       final Integer schemaVersion = (Integer) document.field("schemaVersion");
       if (schemaVersion == null) {
         OLogManager.instance().error(this,
-            "Database's schema is empty! Recreating the system classes and allow the opening of the database but double check the integrity of the database");
+            "Database's schema is empty! Recreating the system classes and allow the opening of the database but double "
+                + "check the integrity of the database", null);
         return;
       } else if (schemaVersion != CURRENT_VERSION_NUMBER && VERSION_NUMBER_V5 != schemaVersion) {
         // VERSION_NUMBER_V5 is needed for guarantee the compatibility to 2.0-M1 and 2.0-M2 no changed associated with it
@@ -742,7 +744,7 @@ public class OSchemaShared extends ODocumentWrapperNoClass
         if (superClassNames == null)
           superClassNames = new ArrayList<String>();
         else
-          superClassNames = new HashSet<String>(superClassNames);
+          superClassNames = new LinkedHashSet<String>(superClassNames);
 
         if (legacySuperClassName != null && !superClassNames.contains(legacySuperClassName))
           superClassNames.add(legacySuperClassName);
@@ -933,7 +935,7 @@ public class OSchemaShared extends ODocumentWrapperNoClass
 
   public OGlobalProperty createGlobalProperty(final String name, final OType type, final Integer id) {
     OGlobalProperty global;
-    OLogManager.instance().error(this,"CREATING GLOB PROP " + name + " id=" + id);
+    OLogManager.instance().error(this, "CREATING GLOB PROP " + name + " id=" + id, null);
 
     if (id < properties.size() && (global = properties.get(id)) != null) {
       if (!global.getName().equals(name) || !global.getType().equals(type))
@@ -1380,7 +1382,7 @@ public class OSchemaShared extends ODocumentWrapperNoClass
   }
 
   private ODatabaseDocumentInternal getDatabase() {
-    return ODatabaseRecordThreadLocal.INSTANCE.get();
+    return ODatabaseRecordThreadLocal.instance().get();
   }
 
   private void ensurePropertiesSize(int size) {
@@ -1420,7 +1422,7 @@ public class OSchemaShared extends ODocumentWrapperNoClass
     int clId;
     try {
       clId = Integer.parseInt(stringValue);
-    } catch (NumberFormatException e) {
+    } catch (NumberFormatException ignore) {
       clId = getDatabase().getClusterIdByName(stringValue);
     }
     return clId;
@@ -1434,7 +1436,7 @@ public class OSchemaShared extends ODocumentWrapperNoClass
       try {
         clId = Integer.parseInt(parts[0]);
         throw new IllegalArgumentException("Cluster id '" + clId + "' cannot be added");
-      } catch (NumberFormatException e) {
+      } catch (NumberFormatException ignore) {
         clId = getDatabase().addCluster(parts[0]);
       }
     }

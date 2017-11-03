@@ -131,7 +131,7 @@ public class ORidBag implements OStringBuilderSerializable, Iterable<OIdentifiab
    *
    * @return true if ridbag contains at leas one instance with the same rid as passed in identifiable.
    */
-  public boolean contains(OIdentifiable identifiable) {
+  public boolean contains(final OIdentifiable identifiable) {
     return delegate.contains(identifiable);
   }
 
@@ -143,7 +143,7 @@ public class ORidBag implements OStringBuilderSerializable, Iterable<OIdentifiab
     delegate.add(identifiable);
   }
 
-  public void remove(OIdentifiable identifiable) {
+  public void remove(final OIdentifiable identifiable) {
     delegate.remove(identifiable);
   }
 
@@ -199,7 +199,7 @@ public class ORidBag implements OStringBuilderSerializable, Iterable<OIdentifiab
 
     final ORecordSerializationContext context = ORecordSerializationContext.getContext();
     if (context != null) {
-      if (isEmbedded() && ODatabaseRecordThreadLocal.INSTANCE.get().getSbTreeCollectionManager() != null
+      if (isEmbedded() && ODatabaseRecordThreadLocal.instance().get().getSbTreeCollectionManager() != null
           && delegate.size() >= topThreshold) {
         ORidBagDelegate oldDelegate = delegate;
         delegate = new OSBTreeRidBag();
@@ -242,7 +242,7 @@ public class ORidBag implements OStringBuilderSerializable, Iterable<OIdentifiab
     }
 
     final UUID oldUuid = uuid;
-    final OSBTreeCollectionManager sbTreeCollectionManager = ODatabaseRecordThreadLocal.INSTANCE.get().getSbTreeCollectionManager();
+    final OSBTreeCollectionManager sbTreeCollectionManager = ODatabaseRecordThreadLocal.instance().get().getSbTreeCollectionManager();
     if (sbTreeCollectionManager != null)
       uuid = sbTreeCollectionManager.listenForChanges(this);
     else

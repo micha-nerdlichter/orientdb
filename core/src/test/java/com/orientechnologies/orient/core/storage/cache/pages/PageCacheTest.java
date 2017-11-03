@@ -27,6 +27,7 @@ import com.orientechnologies.orient.core.storage.cache.*;
 import com.orientechnologies.orient.core.storage.cache.local.OBackgroundExceptionListener;
 import com.orientechnologies.orient.core.storage.impl.local.OFullCheckpointRequestListener;
 import com.orientechnologies.orient.core.storage.impl.local.OLowDiskSpaceListener;
+import com.orientechnologies.orient.core.storage.impl.local.OPageIsBrokenListener;
 import com.orientechnologies.orient.core.storage.impl.local.paginated.atomicoperations.OAtomicOperation;
 import com.orientechnologies.orient.core.storage.impl.local.paginated.atomicoperations.OAtomicOperationMetadata;
 import com.orientechnologies.orient.core.storage.impl.local.paginated.wal.OLogSequenceNumber;
@@ -361,6 +362,14 @@ public class PageCacheTest {
     }
 
     @Override
+    public void addPageIsBrokenListener(OPageIsBrokenListener listener) {
+    }
+
+    @Override
+    public void removePageIsBrokenListener(OPageIsBrokenListener listener) {
+    }
+
+    @Override
     public long bookFileId(String fileName) throws IOException {
       return 0;
     }
@@ -625,6 +634,11 @@ public class PageCacheTest {
     }
 
     @Override
+    public OLogSequenceNumber getOldestTxLsn() {
+      return null;
+    }
+
+    @Override
     public void truncate() throws IOException {
 
     }
@@ -665,7 +679,8 @@ public class PageCacheTest {
     }
 
     @Override
-    public void cutTill(OLogSequenceNumber lsn) throws IOException {
+    public boolean cutTill(OLogSequenceNumber lsn)  {
+      return false;
 
     }
 
@@ -685,8 +700,11 @@ public class PageCacheTest {
     }
 
     @Override
-    public void preventCutTill(OLogSequenceNumber lsn) throws IOException {
+    public void addCutTillLimit(OLogSequenceNumber lsn) {
+    }
 
+    @Override
+    public void removeCutTillLimit(OLogSequenceNumber lsn) {
     }
 
     @Override

@@ -27,13 +27,14 @@ import java.util.concurrent.Callable;
  * all the clients can auto-reconnect to the next available server.
  */
 public class HATxCrashTest extends AbstractHARemoveNode {
-  private final static int SERVERS       = 3;
-  private volatile boolean inserting     = true;
-  private volatile int     serverStarted = 0;
-  private volatile boolean lastServerOn  = false;
+  private final static int     SERVERS       = 3;
+  private volatile     boolean inserting     = true;
+  private volatile     int     serverStarted = 0;
+  private volatile     boolean lastServerOn  = false;
 
   @Test
   public void test() throws Exception {
+
     startupNodesInSequence = true;
     count = 500;
     maxRetries = 10;
@@ -57,18 +58,18 @@ public class HATxCrashTest extends AbstractHARemoveNode {
           try {
             // CRASH LAST SERVER try {
             executeWhen(new Callable<Boolean>() {
-              // CONDITION
-              @Override
-              public Boolean call() throws Exception {
-                final ODatabaseDocumentTx database = poolFactory.get(getDatabaseURL(serverInstance.get(0)), "admin", "admin")
-                    .acquire();
-                try {
-                  return database.countClass("Person") > (count * SERVERS) * 1 / 3;
-                } finally {
-                  database.close();
-                }
-              }
-            }, // ACTION
+                          // CONDITION
+                          @Override
+                          public Boolean call() throws Exception {
+                            final ODatabaseDocumentTx database = poolFactory.get(getDatabaseURL(serverInstance.get(0)), "admin", "admin")
+                                .acquire();
+                            try {
+                              return database.countClass("Person") > (count * SERVERS) * 1 / 3;
+                            } finally {
+                              database.close();
+                            }
+                          }
+                        }, // ACTION
                 new Callable() {
                   @Override
                   public Object call() throws Exception {

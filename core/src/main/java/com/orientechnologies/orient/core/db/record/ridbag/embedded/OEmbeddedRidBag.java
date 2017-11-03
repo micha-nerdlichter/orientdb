@@ -62,7 +62,7 @@ public class OEmbeddedRidBag implements ORidBagDelegate {
     private int nextIndex    = -1;
     private boolean currentRemoved;
 
-    private EntriesIterator(boolean convertToRecord) {
+    private EntriesIterator(final boolean convertToRecord) {
       reset();
       this.convertToRecord = convertToRecord;
     }
@@ -104,7 +104,7 @@ public class OEmbeddedRidBag implements ORidBagDelegate {
       nextIndex = nextIndex();
 
       final OIdentifiable identifiable = (OIdentifiable) nextValue;
-      if (convertToRecord && ODatabaseRecordThreadLocal.INSTANCE.isDefined())
+      if (convertToRecord && ODatabaseRecordThreadLocal.instance().isDefined())
         return identifiable.getRecord();
 
       return identifiable;
@@ -164,7 +164,7 @@ public class OEmbeddedRidBag implements ORidBagDelegate {
   }
 
   @Override
-  public boolean contains(OIdentifiable identifiable) {
+  public boolean contains(final OIdentifiable identifiable) {
     if (identifiable == null)
       return false;
 
@@ -177,7 +177,7 @@ public class OEmbeddedRidBag implements ORidBagDelegate {
   }
 
   @Override
-  public void setOwner(ORecord owner) {
+  public void setOwner(final ORecord owner) {
     if (owner != null && this.owner != null && !this.owner.equals(owner)) {
       throw new IllegalStateException("This data structure is owned by document " + owner
           + " if you want to use it in other document create new rid bag instance and copy content of current one.");
@@ -238,7 +238,7 @@ public class OEmbeddedRidBag implements ORidBagDelegate {
   }
 
   @Override
-  public void remove(OIdentifiable identifiable) {
+  public void remove(final OIdentifiable identifiable) {
 
     if (removeEntry(identifiable)) {
       size--;
@@ -339,7 +339,7 @@ public class OEmbeddedRidBag implements ORidBagDelegate {
 
             sb.append(e.getIdentity());
           }
-        } catch (NoSuchElementException ex) {
+        } catch (NoSuchElementException ignore) {
           // IGNORE THIS
         }
       }
@@ -405,7 +405,7 @@ public class OEmbeddedRidBag implements ORidBagDelegate {
   public int serialize(byte[] stream, int offset, UUID ownerUuid) {
     OIntegerSerializer.INSTANCE.serializeLiteral(size, stream, offset);
     offset += OIntegerSerializer.INT_SIZE;
-    ODatabaseDocumentInternal db = ODatabaseRecordThreadLocal.INSTANCE.getIfDefined();
+    ODatabaseDocumentInternal db = ODatabaseRecordThreadLocal.instance().getIfDefined();
     final int totEntries = entries.length;
     for (int i = 0; i < totEntries; ++i) {
       final Object entry = entries[i];

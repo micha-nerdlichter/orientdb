@@ -17,11 +17,13 @@
 package com.orientechnologies.lucene.engine;
 
 import com.orientechnologies.common.concur.resource.OSharedResourceAdaptiveExternal;
+import com.orientechnologies.common.exception.OException;
 import com.orientechnologies.common.io.OFileUtils;
 import com.orientechnologies.common.log.OLogManager;
 import com.orientechnologies.common.serialization.types.OBinarySerializer;
 import com.orientechnologies.lucene.OLuceneIndexType;
 import com.orientechnologies.lucene.analyzer.OLuceneAnalyzerFactory;
+import com.orientechnologies.lucene.exception.OLuceneIndexException;
 import com.orientechnologies.lucene.query.OLuceneQueryContext;
 import com.orientechnologies.lucene.tx.OLuceneTxChanges;
 import com.orientechnologies.lucene.tx.OLuceneTxChangesMultiRid;
@@ -59,6 +61,9 @@ import java.io.File;
 import java.io.IOException;
 import java.util.*;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.locks.Lock;
+import java.util.concurrent.locks.ReentrantLock;
 
 import static com.orientechnologies.lucene.analyzer.OLuceneAnalyzerFactory.AnalyzerKind.INDEX;
 import static com.orientechnologies.lucene.analyzer.OLuceneAnalyzerFactory.AnalyzerKind.QUERY;
@@ -71,23 +76,29 @@ public abstract class OLuceneIndexEngineAbstract<V> extends OSharedResourceAdapt
 
   public static final String OLUCENE_BASE_DIR = "luceneIndexes";
 
-  protected SearcherManager                searcherManager;
-  protected OIndexDefinition               index;
-  protected TrackingIndexWriter            mgrWriter;
-  protected String                         name;
-  protected String                         clusterIndexName;
-  protected boolean                        automatic;
-  protected ControlledRealTimeReopenThread nrt;
-  protected ODocument                      metadata;
-  protected Version                        version;
+  protected final AtomicLong                     lastAccess;
+  protected       SearcherManager                searcherManager;
+  protected       OIndexDefinition               index;
+  protected       String                         name;
+  protected       String                         clusterIndexName;
+  protected       boolean                        automatic;
+  protected       ControlledRealTimeReopenThread nrt;
+  protected       ODocument                      metadata;
+  protected       Version                        version;
   protected Map<String, Boolean> collectionFields = new HashMap<String, Boolean>();
   protected TimerTask commitTask;
   protected AtomicBoolean closed = new AtomicBoolean(false);
-  protected OStorage  storage;
-  private   long      reopenToken;
-  private   Analyzer  indexAnalyzer;
-  private   Analyzer  queryAnalyzer;
-  private   Directory directory;
+  protected OStorage            storage;
+  private   long                reopenToken;
+  private   Analyzer            indexAnalyzer;
+  private   Analyzer            queryAnalyzer;
+  private   Directory           directory;
+  private   TrackingIndexWriter mgrWriter;
+  private   long                flushIndexInterval;
+  private   long                closeAfterInterval;
+  private   long                firstFlushAfter;
+
+  private Lock openCloseLock;
 
   public OLuceneIndexEngineAbstract(OStorage storage, String indexName) {
     super(OGlobalConfiguration.ENVIRONMENT_CONCURRENT.getValueAsBoolean(),
@@ -96,6 +107,11 @@ public abstract class OLuceneIndexEngineAbstract<V> extends OSharedResourceAdapt
     this.storage = storage;
     this.name = indexName;
 
+    lastAccess = new AtomicLong(System.currentTimeMillis());
+
+    closed = new AtomicBoolean(true);
+
+    openCloseLock = new ReentrantLock();
   }
 
   // TODO: move to utility class
@@ -132,6 +148,10 @@ public abstract class OLuceneIndexEngineAbstract<V> extends OSharedResourceAdapt
     }
   }
 
+  protected void updateLastAccess() {
+    lastAccess.set(System.currentTimeMillis());
+  }
+
   protected abstract IndexWriter openIndexWriter(Directory directory) throws IOException;
 
   protected void addDocument(Document doc) {
@@ -146,18 +166,6 @@ public abstract class OLuceneIndexEngineAbstract<V> extends OSharedResourceAdapt
   @Override
   public void init(String indexName, String indexType, OIndexDefinition indexDefinition, boolean isAutomatic, ODocument metadata) {
 
-    // FIXME how many timers are around?
-
-    commitTask = new TimerTask() {
-      @Override
-      public void run() {
-        if (!closed.get()) {
-          commit();
-        }
-      }
-    };
-    Orient.instance().scheduleTask(commitTask, 10000, 10000);
-
     this.index = indexDefinition;
     this.automatic = isAutomatic;
     this.metadata = metadata;
@@ -166,20 +174,67 @@ public abstract class OLuceneIndexEngineAbstract<V> extends OSharedResourceAdapt
     indexAnalyzer = fc.createAnalyzer(indexDefinition, INDEX, metadata);
     queryAnalyzer = fc.createAnalyzer(indexDefinition, QUERY, metadata);
 
-    try {
+    checkCollectionIndex(indexDefinition);
 
-      this.index = indexDefinition;
-
-      checkCollectionIndex(indexDefinition);
-      reOpen(metadata);
-
-    } catch (IOException e) {
-      OLogManager.instance().error(this, "Error on initializing Lucene index", e);
+    if (metadata.containsField("flushIndexInterval")) {
+      flushIndexInterval = Integer.valueOf(metadata.<Integer>field("flushIndexInterval")).longValue();
+    } else {
+      flushIndexInterval = 10000l;
     }
+
+    if (metadata.containsField("closeAfterInterval")) {
+      closeAfterInterval = Integer.valueOf(metadata.<Integer>field("closeAfterInterval")).longValue();
+    } else {
+      closeAfterInterval = 600000l;
+    }
+
+    if (metadata.containsField("firstFlushAfter")) {
+      firstFlushAfter = Integer.valueOf(metadata.<Integer>field("firstFlushAfter")).longValue();
+    } else {
+      firstFlushAfter = 10000l;
+    }
+
   }
 
-  protected void commit() {
-    flush();
+  private void scheduleCommitTask() {
+    commitTask = new TimerTask() {
+      @Override
+      public boolean cancel() {
+//        OLogManager.instance().info(this, " Cancelling commit task for index:: " + indexName());
+        return super.cancel();
+      }
+
+      @Override
+      public void run() {
+
+        if (shouldClose()) {
+//          OLogManager.instance().info(this, " Closing index:: " + indexName());
+
+          openCloseLock.lock();
+
+          //while on lock the index was opened
+          if (!shouldClose())
+            return;
+          try {
+
+            close();
+          } finally {
+            openCloseLock.unlock();
+          }
+
+        }
+        if (!closed.get()) {
+//          OLogManager.instance().info(this, " Flushing index:: " + indexName());
+          flush();
+        }
+      }
+    };
+
+    Orient.instance().scheduleTask(commitTask, firstFlushAfter, flushIndexInterval);
+  }
+
+  private boolean shouldClose() {
+    return !(directory instanceof RAMDirectory) && System.currentTimeMillis() - lastAccess.get() > closeAfterInterval;
   }
 
   private void checkCollectionIndex(OIndexDefinition indexDefinition) {
@@ -198,41 +253,55 @@ public abstract class OLuceneIndexEngineAbstract<V> extends OSharedResourceAdapt
     }
   }
 
-  private void reOpen(final ODocument metadata) throws IOException {
+  protected void reOpen() throws IOException {
 
     if (mgrWriter != null && mgrWriter.getIndexWriter().isOpen() && directory instanceof RAMDirectory) {
       // don't waste time reopening an in memory index
       return;
     }
-
-    close();
-    open(metadata);
-
+    open();
   }
 
   protected ODatabaseDocumentInternal getDatabase() {
-    return ODatabaseRecordThreadLocal.INSTANCE.get();
+    return ODatabaseRecordThreadLocal.instance().get();
   }
 
-  private void open(final ODocument metadata) throws IOException {
+  private synchronized void open() throws IOException {
 
-    OLuceneDirectoryFactory directoryFactory = new OLuceneDirectoryFactory();
+    if (!closed.get())
+      return;
 
-    directory = directoryFactory.createDirectory(getDatabase(), name, metadata);
+    openCloseLock.lock();
 
-    final IndexWriter indexWriter = createIndexWriter(directory);
-    mgrWriter = new TrackingIndexWriter(indexWriter);
-    searcherManager = new SearcherManager(indexWriter, true, null);
+    try {
+      OLuceneDirectoryFactory directoryFactory = new OLuceneDirectoryFactory();
 
-    reopenToken = 0;
+      directory = directoryFactory.createDirectory(getDatabase(), name, metadata);
 
+      final IndexWriter indexWriter = createIndexWriter(directory);
+      mgrWriter = new TrackingIndexWriter(indexWriter);
+      searcherManager = new SearcherManager(indexWriter, true, null);
+
+      reopenToken = 0;
+
+      startNRT();
+
+      closed.set(false);
+
+      flush();
+
+      scheduleCommitTask();
+    } finally {
+
+      openCloseLock.unlock();
+    }
+
+  }
+
+  private void startNRT() {
     nrt = new ControlledRealTimeReopenThread(mgrWriter, searcherManager, 60.00, 0.1);
     nrt.setDaemon(true);
     nrt.start();
-
-    closed.set(false);
-
-    flush();
   }
 
   private void closeNRT() {
@@ -249,20 +318,16 @@ public abstract class OLuceneIndexEngineAbstract<V> extends OSharedResourceAdapt
   }
 
   private void closeSearchManager() throws IOException {
-    if (searcherManager != null)
+    if (searcherManager != null) {
       searcherManager.close();
+    }
   }
 
   private void commitAndCloseWriter() throws IOException {
-    if (mgrWriter != null) {
-      if (mgrWriter.getIndexWriter().isOpen()) {
-        mgrWriter.getIndexWriter().commit();
-        mgrWriter.getIndexWriter().close();
-        closed.set(true);
-      }
-    }
-    if (commitTask != null) {
-      commitTask.cancel();
+    if (mgrWriter != null && mgrWriter.getIndexWriter().isOpen()) {
+      mgrWriter.getIndexWriter().commit();
+      mgrWriter.getIndexWriter().close();
+      closed.set(true);
     }
   }
 
@@ -272,8 +337,9 @@ public abstract class OLuceneIndexEngineAbstract<V> extends OSharedResourceAdapt
   public void flush() {
 
     try {
-      if (mgrWriter.getIndexWriter().isOpen())
+      if (mgrWriter != null && mgrWriter.getIndexWriter().isOpen())
         mgrWriter.getIndexWriter().commit();
+
     } catch (IOException e) {
       OLogManager.instance().error(this, "Error on flushing Lucene index", e);
     } catch (Throwable e) {
@@ -290,13 +356,15 @@ public abstract class OLuceneIndexEngineAbstract<V> extends OSharedResourceAdapt
 
   @Override
   public void delete() {
+    updateLastAccess();
+    openIfClosed();
 
     if (mgrWriter != null && mgrWriter.getIndexWriter() != null) {
 
       try {
         mgrWriter.getIndexWriter().deleteUnusedFiles();
       } catch (IOException e) {
-        e.printStackTrace();
+        OLogManager.instance().error(this, "Error during deletion of unused files", e);
       }
       close();
     }
@@ -344,6 +412,8 @@ public abstract class OLuceneIndexEngineAbstract<V> extends OSharedResourceAdapt
 
   @Override
   public boolean remove(Object key, OIdentifiable value) {
+    updateLastAccess();
+    openIfClosed();
 
     Query query = deleteQuery(key, value);
     if (query != null)
@@ -372,34 +442,52 @@ public abstract class OLuceneIndexEngineAbstract<V> extends OSharedResourceAdapt
     return collectionDelete;
   }
 
-  @Override
-  public IndexSearcher searcher() throws IOException {
-    try {
-      nrt.waitForGeneration(reopenToken);
-      return searcherManager.acquire();
-    } catch (InterruptedException e) {
-      OLogManager.instance().error(this, "Error on get searcher from Lucene index", e);
+  protected void openIfClosed() {
+    if (closed.get()) {
+//      OLogManager.instance().info(this, "open closed index:: " + indexName());
+
+      try {
+        reOpen();
+      } catch (IOException e) {
+        OLogManager.instance().error(this, "error while opening closed index:: " + indexName(), e);
+
+      }
     }
-    return null;
+  }
+
+  @Override
+  public boolean isCollectionIndex() {
+    return isCollectionDelete();
+  }
+
+  @Override
+  public IndexSearcher searcher() {
+    try {
+      updateLastAccess();
+      openIfClosed();
+      nrt.waitForGeneration(reopenToken);
+      IndexSearcher searcher = searcherManager.acquire();
+      return searcher;
+    } catch (Exception e) {
+      OLogManager.instance().error(this, "Error on get searcher from Lucene index", e);
+      throw OException.wrapException(new OLuceneIndexException("Error on get searcher from Lucene index"), e);
+    }
 
   }
 
   @Override
   public long sizeInTx(OLuceneTxChanges changes) {
-    IndexReader reader = null;
-    IndexSearcher searcher = null;
+    updateLastAccess();
+    openIfClosed();
+    IndexSearcher searcher = searcher();
     try {
-      searcher = searcher();
-      if (searcher != null)
-        reader = searcher.getIndexReader();
-    } catch (IOException e) {
-      OLogManager.instance().error(this, "Error on getting size of Lucene index", e);
+      IndexReader reader = searcher.getIndexReader();
+
+      return changes == null ? reader.numDocs() : reader.numDocs() + changes.numDocs();
     } finally {
-      if (searcher != null) {
-        release(searcher);
-      }
+
+      release(searcher);
     }
-    return changes == null ? reader.numDocs() : reader.numDocs() + changes.numDocs();
   }
 
   @Override
@@ -413,6 +501,8 @@ public abstract class OLuceneIndexEngineAbstract<V> extends OSharedResourceAdapt
 
   @Override
   public Query deleteQuery(Object key, OIdentifiable value) {
+    updateLastAccess();
+    openIfClosed();
     if (isCollectionDelete()) {
       return OLuceneIndexType.createDeleteQuery(value, index.getFields(), key);
     }
@@ -445,6 +535,8 @@ public abstract class OLuceneIndexEngineAbstract<V> extends OSharedResourceAdapt
 
   @Override
   public void clear() {
+    updateLastAccess();
+    openIfClosed();
     try {
       reopenToken = mgrWriter.deleteAll();
     } catch (IOException e) {
@@ -453,19 +545,23 @@ public abstract class OLuceneIndexEngineAbstract<V> extends OSharedResourceAdapt
   }
 
   @Override
-  public void close() {
+  public synchronized void close() {
+    if (closed.get())
+      return;
+
     try {
-      OLogManager.instance().debug(this, "Closing Lucene index '" + this.name + "'...");
+//      OLogManager.instance().info(this, "Closing Lucene index '" + this.name + "'...");
 
       closeNRT();
-
-      cancelCommitTask();
 
       closeSearchManager();
 
       commitAndCloseWriter();
+
+//      OLogManager.instance().info(this, "Closed Lucene index '" + this.name);
+      cancelCommitTask();
+
     } catch (Throwable e) {
-      e.printStackTrace();
       OLogManager.instance().error(this, "Error on closing Lucene index", e);
     }
   }
@@ -474,6 +570,7 @@ public abstract class OLuceneIndexEngineAbstract<V> extends OSharedResourceAdapt
   public OIndexCursor descCursor(ValuesTransformer valuesTransformer) {
     throw new UnsupportedOperationException("Cannot iterate over a lucene index");
   }
+
   @Override
   public OIndexCursor cursor(ValuesTransformer valuesTransformer) {
     throw new UnsupportedOperationException("Cannot iterate over a lucene index");
@@ -489,6 +586,8 @@ public abstract class OLuceneIndexEngineAbstract<V> extends OSharedResourceAdapt
   }
 
   protected void release(IndexSearcher searcher) {
+    updateLastAccess();
+    openIfClosed();
     try {
       searcherManager.release(searcher);
     } catch (IOException e) {
@@ -532,7 +631,7 @@ public abstract class OLuceneIndexEngineAbstract<V> extends OSharedResourceAdapt
       cancelCommitTask();
       commitAndCloseWriter();
     } catch (IOException e) {
-      e.printStackTrace();
+      OLogManager.instance().error(this, "Error on freezing Lucene index:: " + indexName(), e);
     }
 
   }
@@ -541,9 +640,9 @@ public abstract class OLuceneIndexEngineAbstract<V> extends OSharedResourceAdapt
   public void release() {
     try {
       close();
-      reOpen(metadata);
+      reOpen();
     } catch (IOException e) {
-      OLogManager.instance().error(this, "Error on releasing Lucene index", e);
+      OLogManager.instance().error(this, "Error on releasing Lucene index:: " + indexName(), e);
     }
   }
 

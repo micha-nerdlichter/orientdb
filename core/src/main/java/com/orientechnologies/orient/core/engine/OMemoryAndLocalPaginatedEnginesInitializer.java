@@ -26,9 +26,8 @@ import com.orientechnologies.orient.core.config.OGlobalConfiguration;
 import com.orientechnologies.orient.core.storage.cache.local.twoq.O2QCache;
 
 /**
- * Manages common initialization logic for memory and plocal engines. These engines are tight together through
- * dependency to {@link com.orientechnologies.common.directmemory.OByteBufferPool}, which is hard to reconfigure
- * if initialization logic is separate.
+ * Manages common initialization logic for memory and plocal engines. These engines are tight together through dependency to {@link
+ * com.orientechnologies.common.directmemory.OByteBufferPool}, which is hard to reconfigure if initialization logic is separate.
  *
  * @author Sergey Sitnikov
  */
@@ -59,10 +58,10 @@ public class OMemoryAndLocalPaginatedEnginesInitializer {
   }
 
   private void configureDefaults() {
-    if (System.getProperty(OGlobalConfiguration.DISK_CACHE_SIZE.getKey()) == null)
+    if (!OGlobalConfiguration.DISK_CACHE_SIZE.isChanged())
       configureDefaultDiskCacheSize();
 
-    if (System.getProperty(OGlobalConfiguration.WAL_RESTORE_BATCH_SIZE.getKey()) == null)
+    if (!OGlobalConfiguration.WAL_RESTORE_BATCH_SIZE.isChanged())
       configureDefaultWalRestoreBatchSize();
   }
 
@@ -82,10 +81,12 @@ public class OMemoryAndLocalPaginatedEnginesInitializer {
     final long maxDirectMemory = OMemory.getConfiguredMaxDirectMemory();
 
     if (maxDirectMemory == -1) {
-      final long diskCacheInMB = jvmMaxMemory / 1024 / 1024;
+      //subtract 2MB because Java also uses direct byte buffers
+      final long diskCacheInMB = jvmMaxMemory / 1024 / 1024 - 2;
       OLogManager.instance().info(this,
           "OrientDB auto-config DISKCACHE=%,dMB (heap=%,dMB direct=%,dMB os=%,dMB), assuming maximum direct memory size "
-              + "equals to maximum JVM heap size", diskCacheInMB, diskCacheInMB, diskCacheInMB, osMemory / 1024 / 1024);
+              + "equals to maximum JVM heap size", diskCacheInMB, jvmMaxMemory / 1024 / 1024, jvmMaxMemory / 1024 / 1024,
+          osMemory / 1024 / 1024);
       OGlobalConfiguration.DISK_CACHE_SIZE.setValue(diskCacheInMB);
       OGlobalConfiguration.MEMORY_CHUNK_SIZE
           .setValue(Math.min(diskCacheInMB * 1024 * 1024, OGlobalConfiguration.MEMORY_CHUNK_SIZE.getValueAsLong()));

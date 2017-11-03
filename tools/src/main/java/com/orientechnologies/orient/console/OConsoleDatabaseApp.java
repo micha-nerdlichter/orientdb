@@ -473,7 +473,8 @@ public class OConsoleDatabaseApp extends OrientConsole implements OCommandOutput
   @ConsoleCommand(splitInWords = false, description = "Alters a cluster in the current database. The cluster can be physical or memory")
   public void alterCluster(
       @ConsoleParameter(name = "command-text", description = "The command text to execute") String iCommandText) {
-    sqlCommand("alter", iCommandText, "\nCluster updated successfully.\n", false);
+    Object result = sqlCommand("alter", iCommandText, "\nCluster updated successfully.\n", false);
+    message("\nCluster modified, new value set to: " + result);
     updateDatabaseInfo();
   }
 
@@ -1481,6 +1482,7 @@ public class OConsoleDatabaseApp extends OrientConsole implements OCommandOutput
   public void infoClass(@ConsoleParameter(name = "class-name", description = "The name of the class") final String iClassName) {
     checkForDatabase();
 
+    currentDatabase.getMetadata().reload();
     final OClass cls = currentDatabase.getMetadata().getImmutableSchemaSnapshot().getClass(iClassName);
 
     if (cls == null) {
@@ -1794,7 +1796,7 @@ public class OConsoleDatabaseApp extends OrientConsole implements OCommandOutput
           final OCluster cluster = currentDatabase.getStorage().getClusterById(clusterId);
 
           final String conflictStrategy =
-              cluster.getRecordConflictStrategy() != null ? cluster.getRecordConflictStrategy().getName() : "";
+              cluster.getRecordConflictStrategy() != null ? cluster.getRecordConflictStrategy().getName() : null;
 
           count = currentDatabase.countClusterElements(clusterName);
           totalElements += count;
@@ -1811,7 +1813,9 @@ public class OConsoleDatabaseApp extends OrientConsole implements OCommandOutput
           row.field("NAME", clusterName);
           row.field("ID", clusterId);
           row.field("CLASS", className);
-          row.field("CONFLICT-STRATEGY", conflictStrategy);
+          if (!currentDatabase.getStorage().isRemote()) {
+            row.field("CONFLICT-STRATEGY", conflictStrategy);
+          }
           row.field("COUNT", count);
           if (!isRemote) {
             row.field("SPACE-USED", OFileUtils.getSizeAsString(spaceUsed));
@@ -2083,7 +2087,7 @@ public class OConsoleDatabaseApp extends OrientConsole implements OCommandOutput
     }
   }
 
-  @ConsoleCommand(description = "Check database integrity")
+  @ConsoleCommand(description = "Check database integrity", splitInWords = false)
   public void checkDatabase(@ConsoleParameter(name = "options", description = "Options: -v", optional = true) final String iOptions)
       throws IOException {
     checkForDatabase();
@@ -2095,11 +2099,20 @@ public class OConsoleDatabaseApp extends OrientConsole implements OCommandOutput
 
     boolean verbose = iOptions != null && iOptions.contains("-v");
 
+    message("\nChecking storage.");
     try {
       ((OAbstractPaginatedStorage) currentDatabase.getStorage()).check(verbose, this);
     } catch (ODatabaseImportException e) {
       printError(e);
     }
+
+    message("\nChecking indexes.\n");
+    OCheckIndexTool indexTool = new OCheckIndexTool();
+    indexTool.setDatabase(currentDatabase);
+    indexTool.setOutputListener(this);
+    indexTool.setVerbose(true);
+    indexTool.run();
+
   }
 
   @ConsoleCommand(description = "Repair database structure")
@@ -2750,7 +2763,7 @@ public class OConsoleDatabaseApp extends OrientConsole implements OCommandOutput
 
   @Override
   protected boolean isCollectingCommands(final String iLine) {
-    return iLine.startsWith("js") || iLine.startsWith("script");
+    return iLine.trim().equalsIgnoreCase("js") ||  iLine.trim().equalsIgnoreCase("jss") || iLine.toLowerCase().startsWith("script");
   }
 
   @Override

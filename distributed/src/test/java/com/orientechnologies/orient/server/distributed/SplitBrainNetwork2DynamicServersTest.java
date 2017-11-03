@@ -1,17 +1,17 @@
 /*
- * Copyright 2010-2013 Luca Garulli (l.garulli--at--orientechnologies.com)
+ * copyright 2010-2013 luca garulli (l.garulli--at--orientechnologies.com)
  *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
+ * licensed under the apache license, version 2.0 (the "license");
+ * you may not use this file except in compliance with the license.
+ * you may obtain a copy of the license at
  *
- *     http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/license-2.0
  *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+ * unless required by applicable law or agreed to in writing, software
+ * distributed under the license is distributed on an "as is" basis,
+ * without warranties or conditions of any kind, either express or implied.
+ * see the license for the specific language governing permissions and
+ * limitations under the license.
  */
 package com.orientechnologies.orient.server.distributed;
 
@@ -42,10 +42,8 @@ public class SplitBrainNetwork2DynamicServersTest extends AbstractHARemoveNode {
     Assert.assertEquals("europe-0", serverInstance.get(0).getServerInstance().getDistributedManager().getLockManagerServer());
     Assert.assertEquals("europe-0", serverInstance.get(1).getServerInstance().getDistributedManager().getLockManagerServer());
 
-    banner("SIMULATE ISOLATION OF SERVER " + (SERVERS - 1) + "...");
-
-    checkInsertedEntries();
-    checkIndexedEntries();
+    checkInsertedEntries(executeTestsOnServers);
+    checkIndexedEntries(executeTestsOnServers);
 
     serverInstance.get(1).disconnectFrom(serverInstance.get(0));
 
@@ -66,8 +64,8 @@ public class SplitBrainNetwork2DynamicServersTest extends AbstractHARemoveNode {
 
     banner("RUN TEST WITHOUT THE OFFLINE SERVER " + (SERVERS - 1) + "...");
 
-    checkInsertedEntries();
-    checkIndexedEntries();
+    checkInsertedEntries(executeTestsOnServers);
+    checkIndexedEntries(executeTestsOnServers);
 
     count = 10;
 
@@ -95,8 +93,6 @@ public class SplitBrainNetwork2DynamicServersTest extends AbstractHARemoveNode {
 
     expected += count;
 
-    count = 10;
-
     waitForDatabaseIsOnline(0, "europe-0", getDatabaseName(), 90000);
     waitForDatabaseIsOnline(0, "europe-1", getDatabaseName(), 30000);
     assertDatabaseStatusEquals(0, "europe-1", getDatabaseName(), ODistributedServerManager.DB_STATUS.ONLINE);
@@ -113,21 +109,53 @@ public class SplitBrainNetwork2DynamicServersTest extends AbstractHARemoveNode {
     waitFor(0, new OCallable<Boolean, ODatabaseDocumentTx>() {
       @Override
       public Boolean call(final ODatabaseDocumentTx db) {
-        return db.countClass("Person") == expected;
+        final long total = db.countClass("Person");
+        if (total != expected)
+          System.out.println("Waiting for record count reaching " + expected + " on server 0, now it's " + total);
+
+//        System.out.println("COUNT per cluster:");
+//        final OClass cls = db.getMetadata().getSchema().getClass("Person");
+//        for (int c : cls.getPolymorphicClusterIds()) {
+//          final long tot = db.countClusterElements(c);
+//
+//          System.out.println("+ cluster " + c + "(" + db.getClusterNameById(c) + "):" + tot);
+//
+//          System.out.println("+ RECORDS:");
+//          int i = 0;
+//          for (ODocument d : db.browseCluster(db.getClusterNameById(c))) {
+//            System.out.println("+++ " + (i++) + " Record " + d);
+//          }
+//
+//          if( i != tot ){
+//            final long tot2 = db.countClusterElements(c);
+//          }
+//        }
+//
+//        System.out.println("RECORDS:");
+//        int i = 0;
+//        for (ODocument d : db.browseClass("Person")) {
+//          System.out.println("+ " + (i++) + " Record " + d);
+//        }
+
+        return total >= expected;
       }
     }, 10000);
 
     waitFor(1, new OCallable<Boolean, ODatabaseDocumentTx>() {
       @Override
       public Boolean call(final ODatabaseDocumentTx db) {
-        return db.countClass("Person") == expected;
+        final long total = db.countClass("Person");
+        if (total != expected)
+          System.out.println("Waiting for record count reaching " + expected + " on server 1, now it's " + total);
+
+        return total >= expected;
       }
-    }, 60000);
+    }, 10000);
 
     poolFactory.reset();
 
-    checkInsertedEntries();
-    checkIndexedEntries();
+    checkInsertedEntries(executeTestsOnServers);
+    checkIndexedEntries(executeTestsOnServers);
 
     banner("RESTARTING TESTS WITH SERVER " + (SERVERS - 1) + " CONNECTED...");
 

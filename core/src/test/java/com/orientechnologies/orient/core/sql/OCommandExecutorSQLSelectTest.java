@@ -30,14 +30,15 @@ import com.orientechnologies.orient.core.intent.OIntentMassiveInsert;
 import com.orientechnologies.orient.core.iterator.ORecordIteratorClass;
 import com.orientechnologies.orient.core.metadata.schema.OClass;
 import com.orientechnologies.orient.core.metadata.schema.OSchema;
+import com.orientechnologies.orient.core.metadata.schema.OType;
 import com.orientechnologies.orient.core.record.ORecord;
 import com.orientechnologies.orient.core.record.impl.ODocument;
+import com.orientechnologies.orient.core.serialization.OBase64Utils;
 import com.orientechnologies.orient.core.sql.query.OSQLSynchQuery;
 import org.testng.Assert;
 import org.testng.annotations.AfterClass;
 import org.testng.annotations.BeforeClass;
 import org.testng.annotations.Test;
-import sun.misc.BASE64Encoder;
 
 import java.util.*;
 import java.util.regex.Pattern;
@@ -1415,7 +1416,7 @@ public class OCommandExecutorSQLSelectTest {
     doc.field("binaryField", "foobar");
     doc.save();
 
-    String base64Value = new BASE64Encoder().encode(array);
+    String base64Value = OBase64Utils.encodeBytes(array);
 
     List<ODocument> results = db
         .query(new OSQLSynchQuery<ODocument>("select from TestBinaryField where binaryField = decode(?, 'base64')"), base64Value);
@@ -1640,12 +1641,117 @@ public class OCommandExecutorSQLSelectTest {
     db.command(new OCommandSQL("create class " + className)).execute();
     db.command(new OCommandSQL("create property " + className + ".tagz embeddedmap")).execute();
     db.command(new OCommandSQL("insert into " + className + " set tagz = {}")).execute();
-    db.command(new OCommandSQL("update " + className + " SET tagz.foo = [{name:'a', surname:'b'}, {name:'c', surname:'d'}]")).execute();
+    db.command(new OCommandSQL("update " + className + " SET tagz.foo = [{name:'a', surname:'b'}, {name:'c', surname:'d'}]"))
+        .execute();
 
-    List<ODocument> results = db.query(new OSQLSynchQuery<ODocument>("select tagz.values()[0][name = 'a'] as t from "+className));
+    List<ODocument> results = db.query(new OSQLSynchQuery<ODocument>("select tagz.values()[0][name = 'a'] as t from " + className));
     Assert.assertEquals(results.size(), 1);
     Map map = results.get(0).field("t");
     Assert.assertEquals(map.get("surname"), "b");
+  }
+
+  @Test
+  public void testAndOrParentheses() {
+    //issue #6834
+
+    String className = "testAndOrParentheses";
+
+    db.command(new OCommandSQL("create class " + className)).execute();
+    db.command(new OCommandSQL("insert into " + className + " set name = 'foo'")).execute();
+
+    List<ODocument> results = db.query(new OSQLSynchQuery<ODocument>(
+        " select * from " + className + " where  ( (1=1) or (1 in (select 1 from " + className + ")) ) and 1=1 "));
+    Assert.assertEquals(results.size(), 1);
+    results = db.query(new OSQLSynchQuery<ODocument>(
+        " select * from " + className + " where  ( (1=1) or (1 in (select 1 from " + className + ")) ) and 1=2 "));
+    Assert.assertEquals(results.size(), 0);
+
+  }
+
+  @Test
+  public void testComparisonOfShorts() {
+    //issue #7578
+    String className = "testComparisonOfShorts";
+    db.command(new OCommandSQL("create class " + className)).execute();
+    db.command(new OCommandSQL("create property " + className + ".state Short")).execute();
+    db.command(new OCommandSQL("INSERT INTO " + className + " set state = 1")).execute();
+    db.command(new OCommandSQL("INSERT INTO " + className + " set state = 1")).execute();
+    db.command(new OCommandSQL("INSERT INTO " + className + " set state = 2")).execute();
+
+    List<ODocument> results = db.query(new OSQLSynchQuery<ODocument>("select from " + className + " where state in [1]"));
+    Assert.assertEquals(results.size(), 2);
+
+    results = db.query(new OSQLSynchQuery<ODocument>("select from " + className + " where [1] contains state"));
+    Assert.assertEquals(results.size(), 2);
+
+  }
+
+  @Test
+  public void testEnumAsParams() {
+    //issue #7418
+    String className = "testEnumAsParams";
+    db.command(new OCommandSQL("create class " + className)).execute();
+    db.command(new OCommandSQL("INSERT INTO " + className + " set status = ?")).execute(OType.STRING);
+    db.command(new OCommandSQL("INSERT INTO " + className + " set status = ?")).execute(OType.ANY);
+    db.command(new OCommandSQL("INSERT INTO " + className + " set status = ?")).execute(OType.BYTE);
+
+    Map<String, Object> params = new HashMap<String, Object>();
+    List enums = new ArrayList();
+    enums.add(OType.STRING);
+    enums.add(OType.BYTE);
+    params.put("status", enums);
+    List<ODocument> results = db
+        .query(new OSQLSynchQuery<ODocument>("select from " + className + " where status in :status"), params);
+    Assert.assertEquals(results.size(), 2);
+
+  }
+
+  @Test
+  public void testEmbeddedMapOfMapsContainsValue() {
+    //issue #7793
+    String className = "testEmbeddedMapOfMapsContainsValue";
+
+    db.command(new OCommandSQL("create class " + className)).execute();
+    db.command(new OCommandSQL("create property " + className + ".embedded_map EMBEDDEDMAP")).execute();
+    db.command(new OCommandSQL("create property " + className + ".id INTEGER")).execute();
+    db.command(new OCommandSQL(
+        "INSERT INTO " + className + " SET id = 0, embedded_map = {\"key_2\" : {\"name\" : \"key_2\", \"id\" : \"0\"}}")).execute();
+    db.command(new OCommandSQL(
+        "INSERT INTO " + className + " SET id = 1, embedded_map = {\"key_1\" : {\"name\" : \"key_1\", \"id\" : \"1\" }}"))
+        .execute();
+
+    List<ODocument> results = db.query(new OSQLSynchQuery<ODocument>(
+        "select from " + className + " where embedded_map CONTAINSVALUE {\"name\":\"key_2\", \"id\":\"0\"}"));
+    Assert.assertEquals(results.size(), 1);
+  }
+
+  @Test
+  public void testInvertedIndexedCondition() {
+    //issue #7820
+    String className = "testInvertedIndexedCondition";
+
+    db.command(new OCommandSQL("create class " + className)).execute();
+    db.command(new OCommandSQL("create property " + className + ".name STRING")).execute();
+    db.command(new OCommandSQL("insert into " + className + " SET name = \"1\"")).execute();
+    db.command(new OCommandSQL("insert into " + className + " SET name = \"2\"")).execute();
+
+    List<ODocument> results = db.query(new OSQLSynchQuery<ODocument>("SELECT * FROM " + className + " WHERE name >= \"0\""));
+    Assert.assertEquals(results.size(), 2);
+
+    results = db.query(new OSQLSynchQuery<ODocument>("SELECT * FROM " + className + " WHERE \"0\" <= name"));
+    Assert.assertEquals(results.size(), 2);
+
+    db.command(new OCommandSQL("CREATE INDEX " + className + ".name on " + className + " (name) UNIQUE")).execute();
+
+    results = db.query(new OSQLSynchQuery<ODocument>("SELECT * FROM " + className + " WHERE \"0\" <= name"));
+    Assert.assertEquals(results.size(), 2);
+
+    results = db.query(new OSQLSynchQuery<ODocument>("SELECT * FROM " + className + " WHERE \"2\" <= name"));
+    Assert.assertEquals(results.size(), 1);
+
+    results = db.query(new OSQLSynchQuery<ODocument>("SELECT * FROM " + className + " WHERE name >= \"0\""));
+    Assert.assertEquals(results.size(), 2);
+
   }
 
   private long indexUsages(ODatabaseDocumentTx db) {

@@ -15,12 +15,13 @@
  */
 package com.orientechnologies.orient.server.distributed;
 
-import com.hazelcast.cluster.impl.ClusterServiceImpl;
 import com.hazelcast.core.HazelcastInstance;
 import com.hazelcast.instance.HazelcastInstanceImpl;
 import com.hazelcast.instance.HazelcastInstanceProxy;
 import com.hazelcast.instance.Node;
+import com.hazelcast.internal.cluster.impl.ClusterServiceImpl;
 import com.orientechnologies.common.io.OFileUtils;
+import com.orientechnologies.common.log.OLogManager;
 import com.orientechnologies.common.util.OCallable;
 import com.orientechnologies.orient.core.Orient;
 import com.orientechnologies.orient.core.db.document.ODatabaseDocumentTx;
@@ -29,6 +30,7 @@ import com.orientechnologies.orient.core.storage.impl.local.paginated.OLocalPagi
 import com.orientechnologies.orient.server.OServer;
 import com.orientechnologies.orient.server.OServerMain;
 import com.orientechnologies.orient.server.hazelcast.OHazelcastPlugin;
+import com.orientechnologies.orient.server.hazelcast.ONetworkSimulator;
 import com.orientechnologies.orient.server.network.OServerNetworkListener;
 import com.orientechnologies.orient.server.network.protocol.binary.ONetworkProtocolBinary;
 import com.tinkerpop.blueprints.impls.orient.OrientBaseGraph;
@@ -36,6 +38,7 @@ import com.tinkerpop.blueprints.impls.orient.OrientGraphFactory;
 
 import java.io.File;
 import java.io.IOException;
+import java.util.Arrays;
 
 /**
  * Running server instance.
@@ -94,21 +97,49 @@ public class ServerRun {
   }
 
   public void disconnectFrom(final ServerRun... serverIds) {
+    final String currentServerName = server.getDistributedManager().getLocalNodeName();
+
+    OLogManager.instance()
+        .error(this, "**********************************************************************************************************",
+            null);
+    OLogManager.instance()
+        .error(this, "SIMULATING ISOLATION BETWEEN %s AND %s...", null, currentServerName, Arrays.asList(serverIds));
+    OLogManager.instance()
+        .error(this, "**********************************************************************************************************",
+            null);
+
     final Node currentNode = getHazelcastNode(((OHazelcastPlugin) server.getDistributedManager()).getHazelcastInstance());
     for (ServerRun s : serverIds) {
+      // ISOLATE THE SERVERS
+      ONetworkSimulator.getInstance().isolate(currentServerName, s.server.getDistributedManager().getLocalNodeName());
+
       ((OHazelcastPlugin) server.getDistributedManager()).closeRemoteServer(s.server.getDistributedManager().getLocalNodeName());
-      ((OHazelcastPlugin) s.server.getDistributedManager()).closeRemoteServer(server.getDistributedManager().getLocalNodeName());
+      ((OHazelcastPlugin) s.server.getDistributedManager()).closeRemoteServer(currentServerName);
 
       final Node otherNode = getHazelcastNode(((OHazelcastPlugin) s.server.getDistributedManager()).getHazelcastInstance());
 
-      currentNode.clusterService.removeAddress(otherNode.address);
-      otherNode.clusterService.removeAddress(currentNode.address);
+      currentNode.clusterService.removeAddress(otherNode.address, "test");
+      otherNode.clusterService.removeAddress(currentNode.address, "test");
     }
   }
 
   public void rejoin(final ServerRun... serverIds) {
+    final String currentServerName = server.getDistributedManager().getLocalNodeName();
+
+    OLogManager.instance()
+        .error(this, "**********************************************************************************************************",
+            null);
+    OLogManager.instance()
+        .error(this, "REMOVING ISOLATION BETWEEN %s AND %s...", null, currentServerName, Arrays.asList(serverIds));
+    OLogManager.instance()
+        .error(this, "**********************************************************************************************************",
+            null);
+
     final Node currentNode = getHazelcastNode(((OHazelcastPlugin) server.getDistributedManager()).getHazelcastInstance());
     for (ServerRun s : serverIds) {
+      // ISOLATE THE SERVERS
+      ONetworkSimulator.getInstance().removeIsolation(currentServerName, s.server.getDistributedManager().getLocalNodeName());
+
       final Node otherNode = getHazelcastNode(((OHazelcastPlugin) s.server.getDistributedManager()).getHazelcastInstance());
 
       final ClusterServiceImpl clusterService = currentNode.getClusterService();
@@ -202,12 +233,14 @@ public class ServerRun {
   public void terminateServer() {
     if (server != null) {
       try {
-        HazelcastInstance hz = ((OHazelcastPlugin) server.getDistributedManager()).getHazelcastInstance();
-        final Node node = getHazelcastNode(hz);
-        node.getConnectionManager().shutdown();
-        node.shutdown(true);
-        hz.getLifecycleService().terminate();
-
+        final OHazelcastPlugin dm = (OHazelcastPlugin) server.getDistributedManager();
+        if (dm != null) {
+          HazelcastInstance hz = dm.getHazelcastInstance();
+          final Node node = getHazelcastNode(hz);
+          node.getConnectionManager().shutdown();
+          node.shutdown(true);
+          hz.getLifecycleService().terminate();
+        }
       } catch (Exception e) {
         // IGNORE IT
       }

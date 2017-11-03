@@ -47,15 +47,14 @@ import java.util.concurrent.atomic.AtomicReference;
 public class OSyncDatabaseDeltaTask extends OAbstractSyncDatabaseTask {
   public static final int FACTORYID = 13;
 
-  protected OLogSequenceNumber startLSN;
-  protected Set<String> excludedClusterNames = new HashSet<String>();
+  protected Set<String> includeClusterNames = new HashSet<String>();
 
   public OSyncDatabaseDeltaTask() {
   }
 
   public OSyncDatabaseDeltaTask(final OLogSequenceNumber iFirstLSN, final long lastOperationTimestamp) {
     super(lastOperationTimestamp);
-    this.startLSN = iFirstLSN;
+    this.lastLSN = iFirstLSN;
   }
 
   @Override
@@ -79,8 +78,8 @@ public class OSyncDatabaseDeltaTask extends OAbstractSyncDatabaseTask {
     return Boolean.FALSE;
   }
 
-  public void excludeClusterName(final String name) {
-    excludedClusterNames.add(name);
+  public void includeClusterName(final String name) {
+    includeClusterNames.add(name);
   }
 
   protected Object deltaBackup(final ODistributedRequestId requestId, final ODistributedServerManager iManager,
@@ -90,13 +89,13 @@ public class OSyncDatabaseDeltaTask extends OAbstractSyncDatabaseTask {
     if (lastDeployment != null && lastDeployment.longValue() == random) {
       // SKIP IT
       ODistributedServerLog.debug(this, iManager.getLocalNodeName(), getNodeSource(), DIRECTION.NONE,
-          "Skip deploying delta database '%s' because already executed", databaseName);
+          "Skip deploying of delta database '%s' because already executed", databaseName);
       return Boolean.FALSE;
     }
 
     iManager.getConfigurationMap().put(DEPLOYDB + databaseName, random);
 
-    final ODistributedDatabase dDatabase = checkIfCurrentDatabaseIsNotOlder(iManager, databaseName, startLSN);
+    final ODistributedDatabase dDatabase = checkIfCurrentDatabaseIsNotOlder(iManager, databaseName);
 
     iManager.setDatabaseStatus(getNodeSource(), databaseName, ODistributedServerManager.DB_STATUS.SYNCHRONIZING);
 
@@ -105,10 +104,12 @@ public class OSyncDatabaseDeltaTask extends OAbstractSyncDatabaseTask {
             databaseName);
 
     // CREATE A BACKUP OF DATABASE
-    final File backupFile = new File(Orient.getTempPath() + "/backup_" + getNodeSource() + "_" + database.getName() + ".zip");
+    final File backupFile = new File(
+        Orient.getTempPath() + "/backup_" + getNodeSource() + "_" + database.getName() + "_server" + iManager.getLocalNodeId()
+            + ".zip");
 
     ODistributedServerLog.info(this, iManager.getLocalNodeName(), getNodeSource(), DIRECTION.OUT,
-        "Creating delta backup of database '%s' (startLSN=%s) in directory: %s...", databaseName, startLSN,
+        "Creating delta backup of database '%s' (startLSN=%s) in directory: %s...", databaseName, lastLSN,
         backupFile.getAbsolutePath());
 
     if (backupFile.exists())
@@ -134,7 +135,7 @@ public class OSyncDatabaseDeltaTask extends OAbstractSyncDatabaseTask {
     try {
       final AtomicLong counter = new AtomicLong(0);
       endLSN.set(((OAbstractPaginatedStorage) storage)
-          .recordsChangedAfterLSN(startLSN, fileOutputStream, excludedClusterNames, new OCommandOutputListener() {
+          .recordsChangedAfterLSN(lastLSN, fileOutputStream, includeClusterNames, new OCommandOutputListener() {
             @Override
             public void onMessage(final String iText) {
               if (iText.startsWith("read")) {
@@ -149,14 +150,17 @@ public class OSyncDatabaseDeltaTask extends OAbstractSyncDatabaseTask {
 
       if (endLSN.get() == null) {
         // DELTA NOT AVAILABLE, TRY WITH FULL BACKUP
-        exception.set(new ODistributedDatabaseDeltaSyncException(startLSN));
+        exception.set(new ODistributedDatabaseDeltaSyncException(lastLSN));
+      } else if (endLSN.get().equals(lastLSN)) {
+        // nothing has changed
+        return Boolean.FALSE;
       } else
         ODistributedServerLog.info(this, iManager.getLocalNodeName(), getNodeSource(), DIRECTION.OUT,
-            "Delta backup of database '%s' completed. range=%s-%s", databaseName, startLSN, endLSN.get());
+            "Delta backup of database '%s' completed. range=%s-%s", databaseName, lastLSN, endLSN.get());
 
     } catch (Exception e) {
       // UNKNOWN ERROR, DELTA NOT AVAILABLE, TRY WITH FULL BACKUP
-      exception.set(new ODistributedDatabaseDeltaSyncException(startLSN, e.getMessage()));
+      exception.set(new ODistributedDatabaseDeltaSyncException(lastLSN, e.getMessage()));
 
     } finally {
       // try {
@@ -207,24 +211,24 @@ public class OSyncDatabaseDeltaTask extends OAbstractSyncDatabaseTask {
 
   @Override
   public void toStream(final DataOutput out) throws IOException {
-    startLSN.toStream(out);
+    lastLSN.toStream(out);
     out.writeLong(lastOperationTimestamp);
     out.writeLong(random);
-    out.writeInt(excludedClusterNames.size());
-    for (String clName : excludedClusterNames) {
+    out.writeInt(includeClusterNames.size());
+    for (String clName : includeClusterNames) {
       out.writeUTF(clName);
     }
   }
 
   @Override
   public void fromStream(final DataInput in, final ORemoteTaskFactory factory) throws IOException {
-    startLSN = new OLogSequenceNumber(in);
+    lastLSN = new OLogSequenceNumber(in);
     lastOperationTimestamp = in.readLong();
     random = in.readLong();
-    excludedClusterNames.clear();
+    includeClusterNames.clear();
     final int total = in.readInt();
     for (int i = 0; i < total; ++i) {
-      excludedClusterNames.add(in.readUTF());
+      includeClusterNames.add(in.readUTF());
     }
   }
 

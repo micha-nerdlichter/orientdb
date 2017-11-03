@@ -83,7 +83,7 @@ public class OLocalClusterWrapperStrategy implements OClusterSelectionStrategy {
     if (!iClass.equals(cls))
       throw new IllegalArgumentException("Class '" + iClass + "' is different than the configured one: " + cls);
 
-    final OStorage storage = ODatabaseRecordThreadLocal.INSTANCE.get().getStorage();
+    final OStorage storage = ODatabaseRecordThreadLocal.instance().get().getStorage();
     if (!(storage instanceof ODistributedStorage))
       throw new IllegalStateException("Storage is not distributed");
 
@@ -94,7 +94,7 @@ public class OLocalClusterWrapperStrategy implements OClusterSelectionStrategy {
         // DISTRIBUTED CFG IS CHANGED: GET BEST CLUSTER AGAIN
         readConfiguration();
 
-        ODistributedServerLog.info(this, manager.getLocalNodeName(), null, ODistributedServerLog.DIRECTION.NONE,
+        ODistributedServerLog.debug(this, manager.getLocalNodeName(), null, ODistributedServerLog.DIRECTION.NONE,
             "New cluster list for class '%s': %s (dCfgVersion=%d)", cls.getName(), Arrays.toString(localScopedClass.bestClusterIds),
             lastVersion);
       }
@@ -127,7 +127,7 @@ public class OLocalClusterWrapperStrategy implements OClusterSelectionStrategy {
     if (cls.isAbstract())
       throw new IllegalArgumentException("Cannot create a new instance of abstract class");
 
-    final ODatabaseDocument db = ODatabaseRecordThreadLocal.INSTANCE.get();
+    final ODatabaseDocument db = ODatabaseRecordThreadLocal.instance().get();
 
     int[] clusterIds = cls.getClusterIds();
     final List<String> clusterNames = new ArrayList<String>(clusterIds.length);

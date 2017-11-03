@@ -89,11 +89,11 @@ public class OPaginatedStorageDirtyFlag {
     try {
       fileLock = channel.tryLock();
     } catch (OverlappingFileLockException e) {
-      OLogManager.instance().warn(this, "Database is open by another process");
+      OLogManager.instance().warn(this, "Database is open by another process", e);
     }
 
     if (fileLock == null)
-      throw new OStorageException("Can not open storage it is acquired by other process");
+      throw new OStorageException("Cannot open storage it is acquired by other process");
   }
 
   public boolean exists() {

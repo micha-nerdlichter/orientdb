@@ -37,19 +37,10 @@ import java.util.concurrent.Future;
 import static org.junit.Assert.*;
 
 /**
- * It checks the consistency in the cluster with the following scenario:
- * - 3 server (quorum=2)
- * - network fault on server3
- * - 5 threads for each running server write 100 records
- * - writes on server1 and server2 succeeds, writes on server3 are redirected
- * - restart server3
- * - check consistency
- * - changing quorum (quorum=3)
- * - network fault on server3
- * - writes on server1 and server2 don't succeed
- * - restart server3
- * - 5 threads for each running server write 100 records
- * - check consistency
+ * It checks the consistency in the cluster with the following scenario: - 3 server (quorum=2) - network fault on server3 - 5
+ * threads for each running server write 100 records - writes on server1 and server2 succeeds, writes on server3 are redirected -
+ * restart server3 - check consistency - changing quorum (quorum=3) - network fault on server3 - writes on server1 and server2 don't
+ * succeed - restart server3 - 5 threads for each running server write 100 records - check consistency
  *
  * @author Gabriele Ponzi
  * @email <gabriele.ponzi--at--gmail.com>
@@ -142,7 +133,7 @@ public class ShutdownAndRestartNodeScenarioTest extends AbstractScenarioTest {
 
         // trying write on server3, writes must be served from the first available node
         try {
-          ODatabaseRecordThreadLocal.INSTANCE.set(dbServer3);
+          ODatabaseRecordThreadLocal.instance().set(dbServer3);
           ODocument doc = new ODocument("Person").fields("name", "Joe", "surname", "Black").save();
           this.initialCount++;
           result = dbServer3.query(new OSQLSynchQuery<OIdentifiable>("select count(*) from Person"));
@@ -154,9 +145,9 @@ public class ShutdownAndRestartNodeScenarioTest extends AbstractScenarioTest {
         }
 
         // writes on server1 and server2
-        ODatabaseRecordThreadLocal.INSTANCE.set(null);
+        ODatabaseRecordThreadLocal.instance().set(null);
         this.executeWritesOnServers.remove(2);
-        executeMultipleWrites(this.executeWritesOnServers, "plocal");
+        executeMultipleWrites(this.executeWritesOnServers, "plocal", executeWritesOnServers);
 
         // restarting server3
         serverInstance.get(2).startServer(getDistributedServerConfiguration(serverInstance.get(SERVERS - 1)));
@@ -164,7 +155,7 @@ public class ShutdownAndRestartNodeScenarioTest extends AbstractScenarioTest {
         assertTrue(serverInstance.get(2).isActive());
 
         // check consistency
-        ODatabaseRecordThreadLocal.INSTANCE.set(dbServer3);
+        ODatabaseRecordThreadLocal.instance().set(dbServer3);
         dbServer3.getMetadata().getSchema().reload();
         result = dbServer3.query(new OSQLSynchQuery<OIdentifiable>("select count(*) from Person"));
         assertEquals(1, result.size());
@@ -176,9 +167,9 @@ public class ShutdownAndRestartNodeScenarioTest extends AbstractScenarioTest {
         fail(e.getMessage());
       } finally {
         if (dbServer3 != null) {
-          ODatabaseRecordThreadLocal.INSTANCE.set(dbServer3);
+          ODatabaseRecordThreadLocal.instance().set(dbServer3);
           dbServer3.close();
-          ODatabaseRecordThreadLocal.INSTANCE.set(null);
+          ODatabaseRecordThreadLocal.instance().set(null);
         }
       }
 
@@ -248,12 +239,11 @@ public class ShutdownAndRestartNodeScenarioTest extends AbstractScenarioTest {
 
         // single write
         System.out.print("Insert operation in the database...");
-        ODatabaseRecordThreadLocal.INSTANCE.set(dbServer1);
+        ODatabaseRecordThreadLocal.instance().set(dbServer1);
         try {
           new ODocument("Person").fields("id", "L-001", "name", "John", "surname", "Black").save();
           fail("Error: record inserted with 2 server running and writeWuorum=3.");
         } catch (Exception e) {
-          e.printStackTrace();
           assertTrue("Record not inserted because there are 2 servers running and writeQuorum=3.", true);
         }
         System.out.println("Done.\n");
@@ -263,12 +253,12 @@ public class ShutdownAndRestartNodeScenarioTest extends AbstractScenarioTest {
         assertEquals(0, result.size());
 
         final ODatabaseDocumentTx dbServer2 = new ODatabaseDocumentTx(databaseUrl2).open("admin", "admin");
-        ODatabaseRecordThreadLocal.INSTANCE.set(dbServer2);
+        ODatabaseRecordThreadLocal.instance().set(dbServer2);
         result = dbServer2.query(new OSQLSynchQuery<OIdentifiable>("select from Person where id='L-001'"));
         assertEquals(0, result.size());
 
         System.out.println("Done.\n");
-        ODatabaseRecordThreadLocal.INSTANCE.set(null);
+        ODatabaseRecordThreadLocal.instance().set(null);
 
         // restarting server3
         serverInstance.get(2).startServer(getDistributedServerConfiguration(serverInstance.get(SERVERS - 1)));
@@ -281,34 +271,31 @@ public class ShutdownAndRestartNodeScenarioTest extends AbstractScenarioTest {
         System.out.println("Server 3 database is online.");
 
         // WAIT A LITTLE THE SERVER IS SYNCHRONIZED
-        Thread.sleep(5000);
+        Thread.sleep(15000);
 
         System.out.println("Starting new tests...");
 
         // writes on server1, server2 and server3
-        executeMultipleWrites(this.executeWritesOnServers, "plocal");
-
-        // WAIT A LITTLE THE SERVER IS SYNCHRONIZED
-        Thread.sleep(5000);
+        executeMultipleWrites(this.executeWritesOnServers, "plocal", this.executeWritesOnServers);
 
         System.out.println("Checking consistency...");
 
         // check consistency
-        ODatabaseRecordThreadLocal.INSTANCE.set(dbServer1);
+        ODatabaseRecordThreadLocal.instance().set(dbServer1);
         dbServer1.getMetadata().getSchema().reload();
         result = dbServer1.query(new OSQLSynchQuery<OIdentifiable>("select from Person"));
         assertEquals(1500, result.size());
         checkWritesAboveCluster(serverInstance, executeWritesOnServers);
-        ODatabaseRecordThreadLocal.INSTANCE.set(null);
+        ODatabaseRecordThreadLocal.instance().set(null);
 
       } catch (Exception e) {
         e.printStackTrace();
         fail(e.getMessage());
       } finally {
         if (dbServer1 != null) {
-          ODatabaseRecordThreadLocal.INSTANCE.set(dbServer1);
+          ODatabaseRecordThreadLocal.instance().set(dbServer1);
           dbServer1.close();
-          ODatabaseRecordThreadLocal.INSTANCE.set(null);
+          ODatabaseRecordThreadLocal.instance().set(null);
         }
       }
 

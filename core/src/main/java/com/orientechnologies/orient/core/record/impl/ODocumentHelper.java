@@ -22,6 +22,7 @@ package com.orientechnologies.orient.core.record.impl;
 import com.orientechnologies.common.collection.OMultiValue;
 import com.orientechnologies.common.exception.OException;
 import com.orientechnologies.common.io.OIOUtils;
+import com.orientechnologies.common.log.OLogManager;
 import com.orientechnologies.common.util.OPair;
 import com.orientechnologies.orient.core.Orient;
 import com.orientechnologies.orient.core.command.OCommandContext;
@@ -189,8 +190,8 @@ public class ODocumentHelper {
         throw new IllegalArgumentException(
             "Property '" + iFieldName + "' of type '" + iFieldType + "' cannot accept value of type: " + iValue.getClass());
     } else if (Date.class.isAssignableFrom(iFieldType)) {
-      if (iValue instanceof String && ODatabaseRecordThreadLocal.INSTANCE.isDefined()) {
-        final OStorageConfiguration config = ODatabaseRecordThreadLocal.INSTANCE.get().getStorage().getConfiguration();
+      if (iValue instanceof String && ODatabaseRecordThreadLocal.instance().isDefined()) {
+        final OStorageConfiguration config = ODatabaseRecordThreadLocal.instance().get().getStorage().getConfiguration();
 
         DateFormat formatter = config.getDateFormatInstance();
 
@@ -596,7 +597,7 @@ public class ODocumentHelper {
     for (String s : indexRanges) {
       try {
         Integer.parseInt(s);
-      } catch (Exception e) {
+      } catch (NumberFormatException ignore) {
         return false;
       }
     }
@@ -672,7 +673,7 @@ public class ODocumentHelper {
     for (String s : list) {
       try {
         Integer.parseInt(s);
-      } catch (NumberFormatException e) {
+      } catch (NumberFormatException ignore) {
         return false;
       }
     }
@@ -867,9 +868,10 @@ public class ODocumentHelper {
         result = new Date(((Number) currentValue).longValue());
       else
         try {
-          result = ODatabaseRecordThreadLocal.INSTANCE.get().getStorage().getConfiguration().getDateFormatInstance()
+          result = ODatabaseRecordThreadLocal.instance().get().getStorage().getConfiguration().getDateFormatInstance()
               .parse(currentValue.toString());
         } catch (ParseException e) {
+          OLogManager.instance().warn(ODocumentHelper.class, "Error during function evaluation", e);
         }
     else if (function.startsWith("ASDATETIME("))
       if (currentValue instanceof Date)
@@ -878,9 +880,10 @@ public class ODocumentHelper {
         result = new Date(((Number) currentValue).longValue());
       else
         try {
-          result = ODatabaseRecordThreadLocal.INSTANCE.get().getStorage().getConfiguration().getDateTimeFormatInstance()
+          result = ODatabaseRecordThreadLocal.instance().get().getStorage().getConfiguration().getDateTimeFormatInstance()
               .parse(currentValue.toString());
         } catch (ParseException e) {
+          OLogManager.instance().warn(ODocumentHelper.class, "Error during function evaluation", e);
         }
     else {
       // EXTRACT ARGUMENTS
@@ -1401,91 +1404,93 @@ public class ODocumentHelper {
     final ORidBag myBag = myFieldValue;
     final ORidBag otherBag = otherFieldValue;
 
-    final int mySize = makeDbCall(iMyDb, new ODbRelatedCall<Integer>() {
-      public Integer call(ODatabaseDocumentInternal database) {
-        return myBag.size();
-      }
-    });
-
-    final int otherSize = makeDbCall(iOtherDb, new ODbRelatedCall<Integer>() {
-      public Integer call(ODatabaseDocumentInternal database) {
-        return otherBag.size();
-      }
-    });
-
-    if (mySize != otherSize)
-      return false;
-
-    boolean oldMyAutoConvert;
-    boolean oldOtherAutoConvert;
-
-    oldMyAutoConvert = myBag.isAutoConvertToRecord();
-    myBag.setAutoConvertToRecord(false);
-
-    oldOtherAutoConvert = otherBag.isAutoConvertToRecord();
-    otherBag.setAutoConvertToRecord(false);
-
-    final ORidBag otherBagCopy = makeDbCall(iOtherDb, new ODbRelatedCall<ORidBag>() {
-      @Override
-      public ORidBag call(ODatabaseDocumentInternal database) {
-        final ORidBag otherRidBag = new ORidBag();
-        otherRidBag.setAutoConvertToRecord(false);
-
-        for (OIdentifiable identifiable : otherBag)
-          otherRidBag.add(identifiable);
-
-        return otherRidBag;
-      }
-    });
-
+    final ODatabaseDocumentInternal originalDb = ODatabaseRecordThreadLocal.instance().getIfDefined();
     try {
-      final Iterator<OIdentifiable> myIterator = makeDbCall(iMyDb, new ODbRelatedCall<Iterator<OIdentifiable>>() {
-        public Iterator<OIdentifiable> call(ODatabaseDocumentInternal database) {
-          return myBag.iterator();
+
+      final int mySize = makeDbCall(iMyDb, new ODbRelatedCall<Integer>() {
+        public Integer call(ODatabaseDocumentInternal database) {
+          return myBag.size();
         }
       });
 
-      while (makeDbCall(iMyDb, new ODbRelatedCall<Boolean>() {
-        public Boolean call(ODatabaseDocumentInternal database) {
-          return myIterator.hasNext();
+      final int otherSize = makeDbCall(iOtherDb, new ODbRelatedCall<Integer>() {
+        public Integer call(ODatabaseDocumentInternal database) {
+          return otherBag.size();
         }
-      })) {
-        final OIdentifiable myIdentifiable = makeDbCall(iMyDb, new ODbRelatedCall<OIdentifiable>() {
-          @Override
-          public OIdentifiable call(ODatabaseDocumentInternal database) {
-            return myIterator.next();
+      });
+
+      if (mySize != otherSize)
+        return false;
+
+      final boolean oldMyAutoConvert = myBag.isAutoConvertToRecord();
+      myBag.setAutoConvertToRecord(false);
+
+      final boolean oldOtherAutoConvert = otherBag.isAutoConvertToRecord();
+      otherBag.setAutoConvertToRecord(false);
+
+      final List<ORID> otherBagCopy = makeDbCall(iOtherDb, new ODbRelatedCall<List<ORID>>() {
+        @Override
+        public List<ORID> call(final ODatabaseDocumentInternal database) {
+          final List<ORID> otherRidBag = new LinkedList<ORID>();
+          for (OIdentifiable identifiable : otherBag)
+            otherRidBag.add(identifiable.getIdentity());
+
+          return otherRidBag;
+        }
+      });
+
+      try {
+        final Iterator<OIdentifiable> myIterator = makeDbCall(iMyDb, new ODbRelatedCall<Iterator<OIdentifiable>>() {
+          public Iterator<OIdentifiable> call(final ODatabaseDocumentInternal database) {
+            return myBag.iterator();
           }
         });
 
-        final ORID otherRid;
-        if (ridMapper != null) {
-          ORID convertedRid = ridMapper.map(myIdentifiable.getIdentity());
-          if (convertedRid != null)
-            otherRid = convertedRid;
-          else
+        while (makeDbCall(iMyDb, new ODbRelatedCall<Boolean>() {
+          public Boolean call(final ODatabaseDocumentInternal database) {
+            return myIterator.hasNext();
+          }
+        })) {
+          final OIdentifiable myIdentifiable = makeDbCall(iMyDb, new ODbRelatedCall<OIdentifiable>() {
+            @Override
+            public OIdentifiable call(final ODatabaseDocumentInternal database) {
+              return myIterator.next();
+            }
+          });
+
+          final ORID otherRid;
+          if (ridMapper != null) {
+            ORID convertedRid = ridMapper.map(myIdentifiable.getIdentity());
+            if (convertedRid != null)
+              otherRid = convertedRid;
+            else
+              otherRid = myIdentifiable.getIdentity();
+          } else
             otherRid = myIdentifiable.getIdentity();
-        } else
-          otherRid = myIdentifiable.getIdentity();
 
-        makeDbCall(iOtherDb, new ODbRelatedCall<Object>() {
+          makeDbCall(iOtherDb, new ODbRelatedCall<Object>() {
+            @Override
+            public Object call(final ODatabaseDocumentInternal database) {
+              otherBagCopy.remove(otherRid);
+              return null;
+            }
+          });
+        }
+
+        return makeDbCall(iOtherDb, new ODbRelatedCall<Boolean>() {
           @Override
-          public Object call(ODatabaseDocumentInternal database) {
-            otherBagCopy.remove(otherRid);
-            return null;
+          public Boolean call(final ODatabaseDocumentInternal database) {
+            return otherBagCopy.isEmpty();
           }
         });
-
+      } finally {
+        myBag.setAutoConvertToRecord(oldMyAutoConvert);
+        otherBag.setAutoConvertToRecord(oldOtherAutoConvert);
       }
 
-      return makeDbCall(iOtherDb, new ODbRelatedCall<Boolean>() {
-        @Override
-        public Boolean call(ODatabaseDocumentInternal database) {
-          return otherBagCopy.isEmpty();
-        }
-      });
     } finally {
-      myBag.setAutoConvertToRecord(oldMyAutoConvert);
-      otherBag.setAutoConvertToRecord(oldOtherAutoConvert);
+      if (originalDb != null)
+        originalDb.activateOnCurrentThread();
     }
   }
 

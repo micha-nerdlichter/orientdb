@@ -523,7 +523,7 @@ public class ODistributedOutput {
       }
     });
 
-    ODatabaseDocumentInternal db = ODatabaseRecordThreadLocal.INSTANCE.getIfDefined();
+    ODatabaseDocumentInternal db = ODatabaseRecordThreadLocal.instance().getIfDefined();
     if (db != null && db.isClosed())
       db = null;
 
@@ -688,7 +688,6 @@ public class ODistributedOutput {
     }
 
     table.writeRecords(rows, -1);
-    buffer.append("\n");
     return buffer.toString();
   }
 }

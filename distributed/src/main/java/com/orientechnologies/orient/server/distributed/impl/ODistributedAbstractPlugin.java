@@ -35,6 +35,7 @@ import com.orientechnologies.common.log.OLogManager;
 import com.orientechnologies.common.parser.OSystemVariableResolver;
 import com.orientechnologies.common.util.OArrays;
 import com.orientechnologies.common.util.OCallable;
+import com.orientechnologies.common.util.OUncaughtExceptionHandler;
 import com.orientechnologies.orient.core.Orient;
 import com.orientechnologies.orient.core.command.OCommandOutputListener;
 import com.orientechnologies.orient.core.config.OGlobalConfiguration;
@@ -43,17 +44,20 @@ import com.orientechnologies.orient.core.db.document.ODatabaseDocument;
 import com.orientechnologies.orient.core.db.document.ODatabaseDocumentTx;
 import com.orientechnologies.orient.core.exception.OConfigurationException;
 import com.orientechnologies.orient.core.exception.ODatabaseException;
+import com.orientechnologies.orient.core.exception.OStorageException;
 import com.orientechnologies.orient.core.id.ORecordId;
 import com.orientechnologies.orient.core.metadata.schema.OClass;
 import com.orientechnologies.orient.core.metadata.schema.OClassImpl;
 import com.orientechnologies.orient.core.metadata.schema.OSchema;
 import com.orientechnologies.orient.core.metadata.schema.OType;
 import com.orientechnologies.orient.core.record.impl.ODocument;
+import com.orientechnologies.orient.core.storage.OStorage;
 import com.orientechnologies.orient.core.storage.impl.local.OAbstractPaginatedStorage;
 import com.orientechnologies.orient.core.storage.impl.local.paginated.OClusterPositionMap;
 import com.orientechnologies.orient.core.storage.impl.local.paginated.OLocalPaginatedStorage;
 import com.orientechnologies.orient.core.storage.impl.local.paginated.OPaginatedCluster;
 import com.orientechnologies.orient.core.storage.impl.local.paginated.wal.OLogSequenceNumber;
+import com.orientechnologies.orient.server.OClientConnection;
 import com.orientechnologies.orient.server.OServer;
 import com.orientechnologies.orient.server.OSystemDatabase;
 import com.orientechnologies.orient.server.config.OServerConfiguration;
@@ -73,11 +77,14 @@ import com.orientechnologies.orient.server.network.OServerNetworkListener;
 import com.orientechnologies.orient.server.plugin.OServerPluginAbstract;
 
 import java.io.*;
+import java.nio.file.Files;
+import java.nio.file.StandardCopyOption;
 import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 
+import static com.orientechnologies.orient.core.config.OGlobalConfiguration.DISTRIBUTED_CHECKINTEGRITY_LAST_TX;
 import static com.orientechnologies.orient.server.distributed.impl.ODistributedDatabaseImpl.DISTRIBUTED_SYNC_JSON_FILENAME;
 
 /**
@@ -288,7 +295,7 @@ public abstract class ODistributedAbstractPlugin extends OServerPluginAbstract
     if (status != NODE_STATUS.ONLINE && status != NODE_STATUS.STARTING)
       return;
 
-    final ODatabaseDocumentInternal currDb = ODatabaseRecordThreadLocal.INSTANCE.getIfDefined();
+    final ODatabaseDocumentInternal currDb = ODatabaseRecordThreadLocal.instance().getIfDefined();
     try {
       final String dbName = iDatabase.getName();
 
@@ -319,14 +326,14 @@ public abstract class ODistributedAbstractPlugin extends OServerPluginAbstract
           installDbClustersLocalStrategy(iDatabase);
       }
     } catch (HazelcastException e) {
-      throw new OOfflineNodeException("Hazelcast instance is not available");
+      throw OException.wrapException(new OOfflineNodeException("Hazelcast instance is not available"), e);
 
     } catch (HazelcastInstanceNotActiveException e) {
-      throw new OOfflineNodeException("Hazelcast instance is not available");
+      throw OException.wrapException(new OOfflineNodeException("Hazelcast instance is not available"), e);
 
     } finally {
       // RESTORE ORIGINAL DATABASE INSTANCE IN TL
-      ODatabaseRecordThreadLocal.INSTANCE.set(currDb);
+      ODatabaseRecordThreadLocal.instance().set(currDb);
     }
   }
 
@@ -343,16 +350,20 @@ public abstract class ODistributedAbstractPlugin extends OServerPluginAbstract
 
     final ODistributedMessageService msgService = getMessageService();
     if (msgService != null) {
+      try {
+        setDatabaseStatus(getLocalNodeName(), iDatabase.getName(), ODistributedServerManager.DB_STATUS.OFFLINE);
+      } catch (Throwable t) {
+        // IGNORE IT
+      }
+
       msgService.unregisterDatabase(iDatabase.getName());
     }
   }
 
   public void removeStorage(final String name) {
-    synchronized (storages) {
-      final ODistributedStorage storage = storages.remove(name);
-      if (storage != null) {
-        storage.close(true, true);
-      }
+    final ODistributedStorage storage = storages.remove(name);
+    if (storage != null) {
+      storage.close(true, true);
     }
   }
 
@@ -456,7 +467,6 @@ public abstract class ODistributedAbstractPlugin extends OServerPluginAbstract
     // INSERT MEMBERS
     final List<ODocument> members = new ArrayList<ODocument>();
     cluster.field("members", members, OType.EMBEDDEDLIST);
-    // members.add(getLocalNodeConfiguration());
     for (Member member : activeNodes.values()) {
       members.add(getNodeConfigurationByUuid(member.getUuid(), true));
     }
@@ -550,7 +560,7 @@ public abstract class ODistributedAbstractPlugin extends OServerPluginAbstract
 
     final ODistributedRequest req = new ODistributedRequest(this, nodeId, reqId, iDatabaseName, iTask);
 
-    final ODatabaseDocument currentDatabase = ODatabaseRecordThreadLocal.INSTANCE.getIfDefined();
+    final ODatabaseDocument currentDatabase = ODatabaseRecordThreadLocal.instance().getIfDefined();
     if (currentDatabase != null && currentDatabase.getUser() != null)
       // SET CURRENT DATABASE NAME
       req.setUserRID((ORecordId) currentDatabase.getUser().getIdentity().getIdentity());
@@ -607,8 +617,12 @@ public abstract class ODistributedAbstractPlugin extends OServerPluginAbstract
 
               if (ddb != null && !(result instanceof Throwable) && task instanceof OAbstractReplicatedTask && !task
                   .isIdempotent()) {
+
                 // UPDATE LSN WITH LAST OPERATION
                 ddb.setLSN(sourceNodeName, ((OAbstractReplicatedTask) task).getLastLSN(), true);
+
+                // UPDATE LSN WITH LAST LOCAL OPERATION
+                ddb.setLSN(getLocalNodeName(), ((OAbstractPaginatedStorage) database.getStorage().getUnderlying()).getLSN(), true);
               }
             }
           }
@@ -818,8 +832,8 @@ public abstract class ODistributedAbstractPlugin extends OServerPluginAbstract
       try {
         Thread.sleep(100);
       } catch (InterruptedException e) {
-        Thread.interrupted();
-        throw new OOfflineNodeException("Message Service is not available");
+        Thread.currentThread().interrupt();
+        throw OException.wrapException(new OOfflineNodeException("Message Service is not available"), e);
       }
     return messageService;
   }
@@ -873,6 +887,7 @@ public abstract class ODistributedAbstractPlugin extends OServerPluginAbstract
         new OCallable<Boolean, OModifiableDistributedConfiguration>() {
           @Override
           public Boolean call(OModifiableDistributedConfiguration cfg) {
+
             distrDatabase.checkNodeInConfiguration(cfg, nodeName);
 
             // GET ALL THE OTHER SERVERS
@@ -888,8 +903,7 @@ public abstract class ODistributedAbstractPlugin extends OServerPluginAbstract
                 .info(this, nodeName, null, DIRECTION.NONE, "Current node is a %s for database '%s'", cfg.getServerRole(nodeName),
                     databaseName);
 
-            final Set<String> configuredDatabases = serverInstance.getAvailableStorageNames().keySet();
-            if (!iStartup && configuredDatabases.contains(databaseName))
+            if (!forceDeployment && getDatabaseStatus(getLocalNodeName(), databaseName) == DB_STATUS.ONLINE)
               return false;
 
             // INIT STORAGE + UPDATE LOCAL FILE ONLY
@@ -930,12 +944,14 @@ public abstract class ODistributedAbstractPlugin extends OServerPluginAbstract
 
                   } catch (ODistributedDatabaseDeltaSyncException e) {
                     // FALL BACK TO FULL BACKUP
-                    removeStorage(databaseName);
+                    final ODistributedStorage storage = storages.get(databaseName);
+                    if (storage != null)
+                      storage.close(true, false);
 
                     if (deploy == null || !deploy) {
                       // NO AUTO DEPLOY
                       ODistributedServerLog.debug(this, nodeName, null, DIRECTION.NONE,
-                          "Skipping download of database '%s' from the cluster because autoDeploy=false", databaseName);
+                          "Skipping download of the entire database '%s' from the cluster because autoDeploy=false", databaseName);
 
                       setDatabaseStatus(nodeName, databaseName, DB_STATUS.ONLINE);
                       distrDatabase.resume();
@@ -992,6 +1008,8 @@ public abstract class ODistributedAbstractPlugin extends OServerPluginAbstract
 
   protected boolean requestFullDatabase(final ODistributedDatabaseImpl distrDatabase, final String databaseName,
       final boolean backupDatabase, final OModifiableDistributedConfiguration cfg) {
+    ODistributedServerLog.info(this, nodeName, null, DIRECTION.NONE, "Requesting full sync for database '%s'...", databaseName);
+
     for (int retry = 0; retry < DEPLOY_DB_MAX_RETRIES; ++retry) {
       // ASK DATABASE TO THE FIRST NODE, THE FIRST ATTEMPT, OTHERWISE ASK TO EVERYONE
       if (requestDatabaseFullSync(distrDatabase, backupDatabase, databaseName, retry > 0, cfg))
@@ -1014,6 +1032,8 @@ public abstract class ODistributedAbstractPlugin extends OServerPluginAbstract
         .warn(this, nodeName, nodes.toString(), DIRECTION.OUT, "requesting delta database sync for '%s' on local server...",
             databaseName);
 
+    checkIntegrityOfLastTransactions(distrDatabase);
+
     // CREATE A MAP OF NODE/LSN BY READING LAST LSN SAVED
     final Map<String, OLogSequenceNumber> selectedNodes = new HashMap<String, OLogSequenceNumber>(nodes.size());
     for (String node : nodes) {
@@ -1033,13 +1053,27 @@ public abstract class ODistributedAbstractPlugin extends OServerPluginAbstract
       throw new ODistributedDatabaseDeltaSyncException("Requested database delta sync but no LSN was found");
     }
 
+    boolean databaseInstalledCorrectly = false;
+
     for (Map.Entry<String, OLogSequenceNumber> entry : selectedNodes.entrySet()) {
 
       final String targetNode = entry.getKey();
       final OLogSequenceNumber lsn = entry.getValue();
 
+      if (!isNodeOnline(targetNode, databaseName)) {
+        // SKIP THIS SERVER BECAUSE NOT AVAILABLE
+        ODistributedServerLog.info(this, nodeName, targetNode, DIRECTION.OUT,
+            "Skip synchronizing database delta for '%s' (LSN=%s), because server '%s' is not online", databaseName, lsn,
+            targetNode);
+        continue;
+      }
+
       final OSyncDatabaseDeltaTask deployTask = new OSyncDatabaseDeltaTask(lsn,
           distrDatabase.getSyncConfiguration().getLastOperationTimestamp());
+
+      final Set<String> clustersOnLocalServer = cfg.getClustersOnServer(getLocalNodeName());
+      for (String c : clustersOnLocalServer)
+        deployTask.includeClusterName(c);
 
       final List<String> targetNodes = new ArrayList<String>(1);
       targetNodes.add(targetNode);
@@ -1048,8 +1082,13 @@ public abstract class ODistributedAbstractPlugin extends OServerPluginAbstract
           .info(this, nodeName, targetNode, DIRECTION.OUT, "Requesting database delta sync for '%s' LSN=%s...", databaseName, lsn);
 
       try {
-        final Map<String, Object> results = (Map<String, Object>) sendRequest(databaseName, null, targetNodes, deployTask,
-            getNextMessageIdCounter(), ODistributedRequest.EXECUTION_MODE.RESPONSE, null, null, null).getPayload();
+        final ODistributedResponse response = sendRequest(databaseName, null, targetNodes, deployTask, getNextMessageIdCounter(),
+            ODistributedRequest.EXECUTION_MODE.RESPONSE, null, null, null);
+
+        if (response == null)
+          throw new ODistributedDatabaseDeltaSyncException(lsn);
+
+        final Map<String, Object> results = (Map<String, Object>) response.getPayload();
 
         ODistributedServerLog
             .debug(this, nodeName, selectedNodes.toString(), DIRECTION.OUT, "Database delta sync returned: %s", results);
@@ -1061,7 +1100,8 @@ public abstract class ODistributedAbstractPlugin extends OServerPluginAbstract
           final Object value = r.getValue();
 
           if (value instanceof Boolean)
-            continue;
+            // FALSE: NO CHANGES, THE DATABASE IS ALIGNED
+            databaseInstalledCorrectly = true;
           else {
             final String server = r.getKey();
 
@@ -1071,12 +1111,6 @@ public abstract class ODistributedAbstractPlugin extends OServerPluginAbstract
               ODistributedServerLog
                   .warn(this, nodeName, server, DIRECTION.IN, "Error on installing database delta for '%s' (err=%s)", databaseName,
                       exc.getMessage());
-
-              ODistributedServerLog
-                  .warn(this, nodeName, server, DIRECTION.IN, "Requesting full database '%s' sync...", databaseName);
-
-              // RESTORE STATUS TO ONLINE
-              setDatabaseStatus(server, databaseName, DB_STATUS.ONLINE);
 
               throw (ODistributedDatabaseDeltaSyncException) value;
 
@@ -1092,12 +1126,13 @@ public abstract class ODistributedAbstractPlugin extends OServerPluginAbstract
                       databaseName, dbPath, value);
 
               setDatabaseStatus(nodeName, databaseName, DB_STATUS.NOT_AVAILABLE);
-              return false;
+
+              throw OException
+                  .wrapException(new ODistributedDatabaseDeltaSyncException("Requested database delta sync but no LSN was found"),
+                      (Throwable) value);
 
             } else if (value instanceof ODistributedDatabaseChunk) {
-              // distrDatabase.filterBeforeThisMomentum(((ODistributedDatabaseChunk) value).getMomentum());
-              // DISABLED BECAYSE THE MOMENTUM IS NOT YET RELIABLE
-              // distrDatabase.setParsing(true);
+              distrDatabase.filterBeforeThisMomentum(((ODistributedDatabaseChunk) value).getMomentum());
 
               final File uniqueClustersBackupDirectory = getClusterOwnedExclusivelyByCurrentNode(dbPath, databaseName);
 
@@ -1105,11 +1140,11 @@ public abstract class ODistributedAbstractPlugin extends OServerPluginAbstract
                   uniqueClustersBackupDirectory, cfg);
 
               ODistributedServerLog
-                  .info(this, nodeName, targetNode, DIRECTION.IN, "Installed delta of database '%s'...", databaseName);
+                  .info(this, nodeName, targetNode, DIRECTION.IN, "Installed delta of database '%s'", databaseName);
 
-              if (!cfg.isSharded())
-                // DB NOT SHARDED, THE 1ST BACKUP IS GOOD
-                break;
+              // DATABASE INSTALLED CORRECTLY
+              databaseInstalledCorrectly = true;
+              break;
 
             } else
               throw new IllegalArgumentException("Type " + value + " not supported");
@@ -1117,18 +1152,55 @@ public abstract class ODistributedAbstractPlugin extends OServerPluginAbstract
         }
       } catch (ODatabaseIsOldException e) {
         // FORWARD IT
-        throw (ODatabaseIsOldException) e;
+        throw e;
+      } catch (ODistributedDatabaseDeltaSyncException e) {
+        // RE-THROW IT
+        throw e;
       } catch (Exception e) {
         ODistributedServerLog
             .error(this, nodeName, targetNode, DIRECTION.OUT, "Error on asking delta backup of database '%s' (err=%s)",
                 databaseName, e.getMessage());
-        throw new ODistributedDatabaseDeltaSyncException(lsn, e.toString());
+        throw OException.wrapException(new ODistributedDatabaseDeltaSyncException(lsn, e.toString()), e);
       }
+
+      if (databaseInstalledCorrectly && !cfg.isSharded())
+        // DB NOT SHARDED, THE 1ST BACKUP IS GOOD
+        break;
     }
 
-    distrDatabase.resume();
+    if (databaseInstalledCorrectly) {
+      distrDatabase.resume();
+      return true;
+    }
 
-    return true;
+    throw new ODistributedDatabaseDeltaSyncException("Requested database delta sync error");
+  }
+
+  protected void checkIntegrityOfLastTransactions(final ODistributedDatabaseImpl distrDatabase) {
+    final ODatabaseDocumentTx db = distrDatabase.getDatabaseInstance();
+    if (db == null || !db.exists())
+      return;
+
+    final int checkIntegrityLastTxs = DISTRIBUTED_CHECKINTEGRITY_LAST_TX.getValueAsInteger();
+    if (checkIntegrityLastTxs < 1)
+      // SKIP IT
+      return;
+
+    final Set<String> clusters2Include = getDatabaseConfiguration(distrDatabase.getDatabaseName())
+        .getClustersOnServer(getLocalNodeName());
+
+    final OAbstractPaginatedStorage stg = ((OAbstractPaginatedStorage) db.getStorage().getUnderlying());
+
+    final Set<ORecordId> changedRecords = stg.recordsChangedRecently(checkIntegrityLastTxs, clusters2Include);
+
+    if (!changedRecords.isEmpty()) {
+      ODistributedServerLog.info(this, nodeName, null, DIRECTION.NONE,
+          "Executing the realignment of the last records modified before last close %s...", changedRecords);
+
+      distrDatabase.getDatabaseRepairer().repairRecords(changedRecords);
+
+      ODistributedServerLog.info(this, nodeName, null, DIRECTION.NONE, "Realignment completed.");
+    }
   }
 
   protected boolean requestDatabaseFullSync(final ODistributedDatabaseImpl distrDatabase, final boolean backupDatabase,
@@ -1202,7 +1274,7 @@ public abstract class ODistributedAbstractPlugin extends OServerPluginAbstract
 
       } else if (value instanceof Throwable) {
         ODistributedServerLog
-            .error(this, nodeName, r.getKey(), DIRECTION.IN, "Error on installing database '%s' in %s", (Exception) value,
+            .error(this, nodeName, r.getKey(), DIRECTION.IN, "Error on installing database '%s' in %s", (Throwable) value,
                 databaseName, dbPath);
 
         setDatabaseStatus(nodeName, databaseName, DB_STATUS.NOT_AVAILABLE);
@@ -1218,15 +1290,17 @@ public abstract class ODistributedAbstractPlugin extends OServerPluginAbstract
 
         // CLOSE THE STORAGE FIRST
         final ODistributedStorage stg = storages.remove(databaseName);
-        if (stg != null)
-          stg.close(true, false);
 
         if (backupDatabase)
-          backupCurrentDatabase(databaseName);
+          backupCurrentDatabase(databaseName, stg);
+        else if (stg != null)
+          stg.close(true, false);
 
         installDatabaseFromNetwork(dbPath, databaseName, distrDatabase, r.getKey(), (ODistributedDatabaseChunk) value, false,
             uniqueClustersBackupDirectory, cfg);
 
+        OStorage storage = storages.get(databaseName);
+        replaceStorageInSessions(storage);
         distrDatabase.resume();
 
         return true;
@@ -1236,6 +1310,20 @@ public abstract class ODistributedAbstractPlugin extends OServerPluginAbstract
     }
 
     throw new ODistributedException("No response received from remote nodes for auto-deploy of database '" + databaseName + "'");
+  }
+
+  private void replaceStorageInSessions(final OStorage storage) {
+    for (OClientConnection conn : serverInstance.getClientConnectionManager().getConnections()) {
+      final ODatabaseDocumentInternal connDb = conn.getDatabase();
+      if (connDb != null && connDb.getName().equals(storage.getName())) {
+        conn.acquire();
+        try {
+          conn.getDatabase().replaceStorage(storage);
+        } finally {
+          conn.release();
+        }
+      }
+    }
   }
 
   protected File getClusterOwnedExclusivelyByCurrentNode(final String dbPath, final String iDatabaseName) {
@@ -1305,41 +1393,64 @@ public abstract class ODistributedAbstractPlugin extends OServerPluginAbstract
     return null;
   }
 
-  protected void backupCurrentDatabase(final String iDatabaseName) {
-    Orient.instance().unregisterStorageByName(iDatabaseName);
-
+  protected void backupCurrentDatabase(final String iDatabaseName, ODistributedStorage stg) {
     // move directory to ../backup/databases/<db-name>
-    final String backupdirectory = OGlobalConfiguration.DISTRIBUTED_BACKUP_DIRECTORY.getValueAsString();
-    if (backupdirectory == null || OIOUtils.getStringContent(backupdirectory).trim().isEmpty())
+    final String backupDirectory = OGlobalConfiguration.DISTRIBUTED_BACKUP_DIRECTORY.getValueAsString();
+    if (backupDirectory == null || OIOUtils.getStringContent(backupDirectory).trim().isEmpty())
       // skip backup
       return;
 
-    String backuppath = backupdirectory.startsWith("/") ? backupdirectory : serverInstance.getDatabaseDirectory() + backupdirectory;
-    if (!backuppath.endsWith("/"))
-      backuppath += "/";
-    backuppath += iDatabaseName;
+    String backupPath;
 
-    final File backupfullpath = new File(backuppath);
-    final File f = new File(backupdirectory);
-    if (f.exists())
+    if (backupDirectory.startsWith("/"))
+      backupPath = backupDirectory;
+    else {
+      if (backupDirectory.startsWith("../")) {
+        backupPath = new File(serverInstance.getDatabaseDirectory()).getParent() + backupDirectory.substring("..".length());
+      } else
+        backupPath = serverInstance.getDatabaseDirectory() + backupDirectory;
+    }
+
+    if (!backupPath.endsWith("/"))
+      backupPath += "/";
+
+    backupPath += iDatabaseName;
+
+    final File backupfullpath = new File(backupPath);
+    if (backupfullpath.exists())
       OFileUtils.deleteRecursively(backupfullpath);
     else
-      f.mkdirs();
+      backupfullpath.mkdirs();
 
-    final String dbpath = serverInstance.getDatabaseDirectory() + iDatabaseName;
+    OCallable<Void, String> callable = new OCallable<Void, String>() {
+      @Override
+      public Void call(String dbpath) {
+        // move the database on current node
+        ODistributedServerLog.warn(this, nodeName, null, DIRECTION.NONE,
+            "Moving existent database '%s' in '%s' to '%s' and get a fresh copy from a remote node...", iDatabaseName, dbpath,
+            backupfullpath.getPath());
+        final File oldDirectory = new File(dbpath);
+        if (oldDirectory.exists() && oldDirectory.isDirectory()) {
 
-    // move the database on current node
-    ODistributedServerLog.warn(this, nodeName, null, DIRECTION.NONE,
-        "moving existent database '%s' in '%s' to '%s' and get a fresh copy from a remote node...", iDatabaseName, dbpath,
-        backuppath);
+          try {
+            Files.move(oldDirectory.toPath(), backupfullpath.toPath(), StandardCopyOption.REPLACE_EXISTING);
+          } catch (IOException e) {
+            ODistributedServerLog.warn(this, nodeName, null, DIRECTION.NONE,
+                "Error on moving existent database '%s' located in '%s' to '%s' (error=%s). Deleting old database anyway",
+                iDatabaseName, dbpath, backupfullpath, e);
 
-    final File olddirectory = new File(dbpath);
-    if (!olddirectory.renameTo(backupfullpath)) {
-      ODistributedServerLog.error(this, nodeName, null, DIRECTION.NONE,
-          "error on moving existent database '%s' located in '%s' to '%s'. deleting old database...", iDatabaseName, dbpath,
-          backupfullpath);
+            OFileUtils.deleteRecursively(oldDirectory);
+          }
+        }
 
-      OFileUtils.deleteRecursively(olddirectory);
+        return null;
+      }
+    };
+    if (stg != null)
+      stg.closeAndMove(callable);
+    else {
+      final String dbpath = serverInstance.getDatabaseDirectory() + iDatabaseName;
+      callable.call(dbpath);
     }
   }
 
@@ -1350,7 +1461,7 @@ public abstract class ODistributedAbstractPlugin extends OServerPluginAbstract
       final ODistributedDatabaseImpl distrDatabase, final String iNode, final ODistributedDatabaseChunk firstChunk,
       final boolean delta, final File uniqueClustersBackupDirectory, final OModifiableDistributedConfiguration cfg) {
 
-    final String fileName = Orient.getTempPath() + "install_" + databaseName + ".zip";
+    final String fileName = Orient.getTempPath() + "install_" + databaseName + "_server" + getLocalNodeId() + ".zip";
 
     final String localNodeName = nodeName;
 
@@ -1376,7 +1487,7 @@ public abstract class ODistributedAbstractPlugin extends OServerPluginAbstract
     final AtomicReference<ODistributedMomentum> momentum = new AtomicReference<ODistributedMomentum>();
 
     try {
-      new Thread(new Runnable() {
+      Thread t = new Thread(new Runnable() {
         @Override
         public void run() {
           try {
@@ -1430,7 +1541,9 @@ public abstract class ODistributedAbstractPlugin extends OServerPluginAbstract
             throw OException.wrapException(new ODistributedException("Error on transferring database"), e);
           }
         }
-      }).start();
+      });
+      t.setUncaughtExceptionHandler(new OUncaughtExceptionHandler());
+      t.start();
 
     } catch (Exception e) {
       ODistributedServerLog
@@ -1441,24 +1554,24 @@ public abstract class ODistributedAbstractPlugin extends OServerPluginAbstract
     final ODatabaseDocumentTx db = installDatabaseOnLocalNode(databaseName, dbPath, iNode, fileName, delta,
         uniqueClustersBackupDirectory, cfg);
 
-    if (db != null) {
-      // OVERWRITE THE MOMENTUM FROM THE ORIGINAL SERVER AND ADD LAST LOCAL LSN
-      try {
-        distrDatabase.getSyncConfiguration().load();
-        distrDatabase.getSyncConfiguration()
-            .setLastLSN(localNodeName, ((OLocalPaginatedStorage) db.getStorage().getUnderlying()).getLSN(), false);
-      } catch (IOException e) {
-        ODistributedServerLog.error(this, nodeName, null, DIRECTION.NONE, "Error on loading %s file for database '%s'", e,
-            DISTRIBUTED_SYNC_JSON_FILENAME, databaseName);
-      }
+    if (db == null)
+      return;
 
-      try {
-        rebalanceClusterOwnership(nodeName, db, cfg, false);
-        distrDatabase.setOnline();
-      } finally {
-        db.activateOnCurrentThread();
-        db.close();
-      }
+    // OVERWRITE THE MOMENTUM FROM THE ORIGINAL SERVER AND ADD LAST LOCAL LSN
+    try {
+      distrDatabase.getSyncConfiguration().load();
+      distrDatabase.getSyncConfiguration()
+          .setLastLSN(localNodeName, ((OLocalPaginatedStorage) db.getStorage().getUnderlying()).getLSN(), false);
+    } catch (IOException e) {
+      ODistributedServerLog.error(this, nodeName, null, DIRECTION.NONE, "Error on loading %s file for database '%s'", e,
+          DISTRIBUTED_SYNC_JSON_FILENAME, databaseName);
+    }
+
+    try {
+      distrDatabase.setOnline();
+    } finally {
+      db.activateOnCurrentThread();
+      db.close();
     }
 
     // ASK FOR INDIVIDUAL CLUSTERS IN CASE OF SHARDING AND NO LOCAL COPY
@@ -1480,6 +1593,15 @@ public abstract class ODistributedAbstractPlugin extends OServerPluginAbstract
     for (String cl : toSynchClusters) {
       // FILTER CLUSTER CHECKING IF ANY NODE IS ACTIVE
       OCommandExecutorSQLHASyncCluster.replaceCluster(this, serverInstance, databaseName, cl);
+    }
+
+    try {
+      rebalanceClusterOwnership(nodeName, db, cfg, false);
+    } catch (Exception e) {
+      // HANDLE IT AS WARNING
+      ODistributedServerLog
+          .warn(this, nodeName, null, DIRECTION.NONE, "Error on re-balancing the cluster for database '%s'", e, databaseName);
+      // NOT CRITICAL, CONTINUE
     }
   }
 
@@ -1531,7 +1653,7 @@ public abstract class ODistributedAbstractPlugin extends OServerPluginAbstract
             final Set<String> availableNodes = getAvailableNodeNames(iDatabase.getName());
 
             final List<String> cluster2Create = clusterAssignmentStrategy
-                .assignClusterOwnershipOfClass(iDatabase, lastCfg, iClass, availableNodes);
+                .assignClusterOwnershipOfClass(iDatabase, lastCfg, iClass, availableNodes, true);
 
             final Map<OClass, List<String>> cluster2CreateMap = new HashMap<OClass, List<String>>(1);
             cluster2CreateMap.put(iClass, cluster2Create);
@@ -1570,7 +1692,7 @@ public abstract class ODistributedAbstractPlugin extends OServerPluginAbstract
               public Object call() throws Exception {
                 try {
                   clazz.addCluster(newClusterName);
-                } catch (Exception e) {
+                } catch (Throwable e) {
                   if (!iDatabase.getClusterNames().contains(newClusterName)) {
                     // NOT CREATED
                     ODistributedServerLog.error(this, getLocalNodeName(), null, ODistributedServerLog.DIRECTION.NONE,
@@ -1601,10 +1723,9 @@ public abstract class ODistributedAbstractPlugin extends OServerPluginAbstract
   /**
    * Executes an operation protected by a distributed lock (one per database).
    *
-   * @param <T>            Return type
-   * @param databaseName   Database name
-   * @param timeoutLocking
-   * @param iCallback      Operation @return The operation's result of type T
+   * @param <T>          Return type
+   * @param databaseName Database name
+   * @param iCallback    Operation @return The operation's result of type T
    */
   public <T> T executeInDistributedDatabaseLock(final String databaseName, final long timeoutLocking,
       OModifiableDistributedConfiguration lastCfg, final OCallable<T, OModifiableDistributedConfiguration> iCallback) {
@@ -1699,7 +1820,7 @@ public abstract class ODistributedAbstractPlugin extends OServerPluginAbstract
     final Map<OClass, List<String>> cluster2CreateMap = new HashMap<OClass, List<String>>(1);
     for (final OClass clazz : schema.getClasses()) {
       final List<String> cluster2Create = clusterAssignmentStrategy
-          .assignClusterOwnershipOfClass(iDatabase, cfg, clazz, availableNodes);
+          .assignClusterOwnershipOfClass(iDatabase, cfg, clazz, availableNodes, canCreateNewClusters);
 
       cluster2CreateMap.put(clazz, cluster2Create);
     }
@@ -1997,10 +2118,19 @@ public abstract class ODistributedAbstractPlugin extends OServerPluginAbstract
 
     if (dbUrl.startsWith("plocal:")) {
       // CHECK SPECIAL CASE WITH MULTIPLE SERVER INSTANCES ON THE SAME JVM
-      final String dbDirectory = serverInstance.getDatabaseDirectory();
-      if (!dbUrl.substring("plocal:".length()).startsWith(dbDirectory))
-        // SKIP IT: THIS HAPPENS ONLY ON MULTIPLE SERVER INSTANCES ON THE SAME JVM
-        return false;
+      final OLocalPaginatedStorage storage = (OLocalPaginatedStorage) iDatabase.getStorage().getUnderlying();
+      try {
+        final String storagePath = new File(storage.getStoragePath()).getCanonicalPath();
+        final String dbDirectory = new File(serverInstance.getDatabaseDirectory()).getCanonicalPath();
+
+        if (!storagePath.startsWith(dbDirectory))
+          // SKIP IT: THIS HAPPENS ONLY ON MULTIPLE SERVER INSTANCES ON THE SAME JVM
+          return false;
+
+      } catch (IOException ioe) {
+        throw OException.wrapException(new OStorageException("Failed to resolve DB path"), ioe);
+      }
+
     } else if (dbUrl.startsWith("remote:"))
       return false;
 
@@ -2019,7 +2149,7 @@ public abstract class ODistributedAbstractPlugin extends OServerPluginAbstract
       lastServerDump = compactStatus;
 
       ODistributedServerLog
-          .info(this, getLocalNodeName(), null, DIRECTION.NONE, "Distributed servers status (*=current @=lockmgr[%s]):\n%s",
+          .info(this, getLocalNodeName(), null, DIRECTION.NONE, "Distributed servers status (*=current @=lockManager[%s]):\n%s",
               getLockManagerServer(), ODistributedOutput.formatServerStatus(this, cfg));
     }
   }

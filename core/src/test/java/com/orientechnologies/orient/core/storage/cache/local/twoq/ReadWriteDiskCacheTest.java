@@ -8,6 +8,7 @@ import com.orientechnologies.orient.core.Orient;
 import com.orientechnologies.orient.core.config.OGlobalConfiguration;
 import com.orientechnologies.orient.core.config.OStorageSegmentConfiguration;
 import com.orientechnologies.orient.core.exception.OAllCacheEntriesAreUsedException;
+import com.orientechnologies.orient.core.storage.OChecksumMode;
 import com.orientechnologies.orient.core.storage.cache.OCacheEntry;
 import com.orientechnologies.orient.core.storage.cache.OCachePointer;
 import com.orientechnologies.orient.core.storage.cache.OPageDataVerificationError;
@@ -40,6 +41,7 @@ public class ReadWriteDiskCacheTest {
   public static final  int READ_CACHE_MAX_MEMORY   = 4 * PAGE_SIZE;
   public static final  int writeCacheAmountOfPages = 15000;
   public static final  int WRITE_CACHE_MAX_SIZE    = writeCacheAmountOfPages * PAGE_SIZE;
+  public static final  int SEGMENT_SIZE            = 10 * 1024;
 
   private O2QCache  readBuffer;
   private OWOWCache writeBuffer;
@@ -142,7 +144,7 @@ public class ReadWriteDiskCacheTest {
 
   private void initBuffer() throws IOException {
     writeBuffer = new OWOWCache(false, PAGE_SIZE, new OByteBufferPool(PAGE_SIZE), -1, writeAheadLog, -1, WRITE_CACHE_MAX_SIZE,
-        WRITE_CACHE_MAX_SIZE + READ_CACHE_MAX_MEMORY, storageLocal, false, files, 1);
+        WRITE_CACHE_MAX_SIZE + READ_CACHE_MAX_MEMORY, storageLocal, false, files, 1, OChecksumMode.StoreAndThrow);
     writeBuffer.loadRegisteredFiles();
 
     readBuffer = new O2QCache(READ_CACHE_MAX_MEMORY, PAGE_SIZE, false, 50);
@@ -1126,14 +1128,15 @@ public class ReadWriteDiskCacheTest {
     if (!file.exists())
       file.mkdir();
 
-    writeAheadLog = new ODiskWriteAheadLog(1024, -1, 10 * 1024, null, true, storageLocal, 10);
+    writeAheadLog = new ODiskWriteAheadLog(1024, -1, SEGMENT_SIZE, null, true, storageLocal, 10);
 
     final OStorageSegmentConfiguration segmentConfiguration = new OStorageSegmentConfiguration(storageLocal.getConfiguration(),
         "readWriteDiskCacheTest.tst", 0);
     segmentConfiguration.fileType = OFileClassic.NAME;
 
     writeBuffer = new OWOWCache(false, 8 + systemOffset, new OByteBufferPool(8 + systemOffset), 10000, writeAheadLog, 100,
-        2 * (8 + systemOffset), 2 * (8 + systemOffset) + 4 * (8 + systemOffset), storageLocal, false, files, 10);
+        2 * (8 + systemOffset), 2 * (8 + systemOffset) + 4 * (8 + systemOffset), storageLocal, false, files, 10,
+        OChecksumMode.StoreAndThrow);
     writeBuffer.loadRegisteredFiles();
     readBuffer = new O2QCache(4 * (8 + systemOffset), 8 + systemOffset, false, 20);
 
@@ -1150,7 +1153,7 @@ public class ReadWriteDiskCacheTest {
 
       dataPointer.acquireExclusiveLock();
 
-      OLogSequenceNumber pageLSN = writeAheadLog.log(new WriteAheadLogTest.TestRecord(30, false));
+      OLogSequenceNumber pageLSN = writeAheadLog.log(new WriteAheadLogTest.TestRecord(-1, SEGMENT_SIZE, 58, false, true));
 
       setLsn(dataPointer.getSharedBuffer(), pageLSN);
 

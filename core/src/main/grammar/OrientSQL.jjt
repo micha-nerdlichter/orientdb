@@ -50,6 +50,11 @@ public class OrientSql {
       this(new JavaCharStream(stream));
     }
 
+    public OrientSql(InputStream stream, String charset) throws java.io.UnsupportedEncodingException {
+      this(new JavaCharStream(stream, charset));
+    }
+
+
 }
 
 PARSER_END(OrientSql)
@@ -361,6 +366,8 @@ TOKEN:
 	< RID: ( "R" | "r") ( "I" | "i") ( "D" | "d") >
 	|
 	< RIDS: ( "R" | "r") ( "I" | "i") ( "D" | "d") ( "S" | "s") >
+	|
+	< MOVE: ( "m" | "M" ) ( "o" | "O" ) ( "v" | "V" ) ( "e" | "E" ) >
 	|
 	< THIS: "@" ( ( "t" | "T" ) ( "h" | "H" ) ( "i" | "I" ) ( "s" | "S" ) ) >
 	|
@@ -825,6 +832,8 @@ OIdentifier Identifier():
     |
     token = <RIDS>
     |
+    token = <MOVE>
+    |
     quotedToken = <QUOTED_IDENTIFIER>
 ) {
 
@@ -954,6 +963,9 @@ OStatement StatementInternal():
                 |
                 LOOKAHEAD(CreateVertexStatementEmptyNoTarget())
                 result = CreateVertexStatementEmptyNoTarget()
+                |
+                LOOKAHEAD(MoveVertexStatement())
+                result = MoveVertexStatement()
                 |
                 LOOKAHEAD(CreateEdgeStatement())
                 result = CreateEdgeStatement()
@@ -1216,7 +1228,13 @@ ODeleteStatement DeleteStatement():
 	<DELETE>
 	<FROM>
 	jjtThis.fromClause = FromClause()
-	[ <RETURN> <BEFORE> { jjtThis.returnBefore = true; } ]
+	[ <RETURN>
+	    (
+	      ( <BEFORE> { jjtThis.returnBefore = true; } )
+	      |
+	      ( <COUNT> {jjtThis.returnCount = true; } )
+	    )
+	]
 	[ <WHERE> jjtThis.whereClause = WhereClause() ]
 	[ jjtThis.limit = Limit() ]
 	[ <UNSAFE> { jjtThis.unsafe = true; }]
@@ -1231,11 +1249,38 @@ ODeleteVertexStatement DeleteVertexStatement():
 	<VERTEX>
 	[ <FROM> {jjtThis.from = true;} ]
 	jjtThis.fromClause = FromClause()
-	[ <RETURN> <BEFORE> { jjtThis.returnBefore = true; } ]
+	[ <RETURN>
+	   (
+    	 ( <BEFORE> { jjtThis.returnBefore = true; } )
+    	 |
+    	 ( <COUNT> {jjtThis.returnCount = true; } )
+       )
+    ]
 	[ <WHERE> jjtThis.whereClause = WhereClause() ]
     [ jjtThis.limit = Limit() ]
     [ jjtThis.batch = Batch() ]
 ) {return jjtThis;}
+}
+
+OMoveVertexStatement MoveVertexStatement():
+{ OExpression lastSetExpr; }
+{
+  (
+     <MOVE> <VERTEX>
+     jjtThis.source = FromItem()
+     <TO>
+     (
+        jjtThis.targetCluster = Cluster()
+        |
+        (
+          <CLASS>
+          <COLON>
+          jjtThis.targetClass = Identifier()
+        )
+     )
+     [ jjtThis.updateOperations = UpdateOperations() ]
+     [ jjtThis.batch = Batch() ]
+  ){ return jjtThis; }
 }
 
 ODeleteEdgeStatement DeleteEdgeStatement():
@@ -1726,11 +1771,25 @@ OInsertStatement InsertStatement():
     [
         [ <FROM> { jjtThis.selectWithFrom = true; } ]
         (
-             jjtThis.selectStatement = SelectStatement()
+             (
+                LOOKAHEAD( SelectStatement() )
+                jjtThis.selectStatement = SelectStatement()
+                |
+                jjtThis.selectStatement = SelectWithoutTargetStatement()
+             )
              |
              LOOKAHEAD(2)
             (
-                <LPAREN> jjtThis.selectStatement = SelectStatement() { jjtThis.selectInParentheses = true; } <RPAREN>
+                <LPAREN>
+                (
+                   LOOKAHEAD( SelectStatement() )
+                   jjtThis.selectStatement = SelectStatement()
+                   |
+                   jjtThis.selectStatement = SelectWithoutTargetStatement()
+                )
+                { jjtThis.selectInParentheses = true; }
+                <RPAREN>
+
             )
         )
     ]

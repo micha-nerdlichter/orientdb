@@ -44,6 +44,11 @@ public class OMemoryWriteAheadLog extends OAbstractWriteAheadLog {
   }
 
   @Override
+  public OLogSequenceNumber getOldestTxLsn() {
+    throw new UnsupportedOperationException("Operation not supported for in memory storage.");
+  }
+
+  @Override
   public void flush() {
   }
 
@@ -100,7 +105,8 @@ public class OMemoryWriteAheadLog extends OAbstractWriteAheadLog {
   }
 
   @Override
-  public void cutTill(OLogSequenceNumber lsn) throws IOException {
+  public boolean cutTill(OLogSequenceNumber lsn) {
+    return false;
   }
 
   @Override
@@ -116,7 +122,11 @@ public class OMemoryWriteAheadLog extends OAbstractWriteAheadLog {
   }
 
   @Override
-  public void preventCutTill(OLogSequenceNumber lsn) throws IOException {
+  public void addCutTillLimit(OLogSequenceNumber lsn)  {
+  }
+
+  @Override
+  public void removeCutTillLimit(OLogSequenceNumber lsn) {
   }
 
   @Override

@@ -22,6 +22,7 @@ package com.orientechnologies.orient.server.distributed.impl.task;
 import com.orientechnologies.common.concur.lock.OLockException;
 import com.orientechnologies.common.io.OFileUtils;
 import com.orientechnologies.common.log.OLogManager;
+import com.orientechnologies.common.util.OUncaughtExceptionHandler;
 import com.orientechnologies.orient.core.Orient;
 import com.orientechnologies.orient.core.command.OCommandOutputListener;
 import com.orientechnologies.orient.core.config.OGlobalConfiguration;
@@ -63,7 +64,7 @@ public class OSyncDatabaseTask extends OAbstractSyncDatabaseTask {
 
       final String databaseName = database.getName();
 
-      final ODistributedDatabase dDatabase = checkIfCurrentDatabaseIsNotOlder(iManager, databaseName, null);
+      final ODistributedDatabase dDatabase = checkIfCurrentDatabaseIsNotOlder(iManager, databaseName);
 
       try {
         final Long lastDeployment = (Long) iManager.getConfigurationMap().get(DEPLOYDB + databaseName);
@@ -77,11 +78,6 @@ public class OSyncDatabaseTask extends OAbstractSyncDatabaseTask {
         iManager.getConfigurationMap().put(DEPLOYDB + databaseName, random);
 
         iManager.setDatabaseStatus(getNodeSource(), databaseName, ODistributedServerManager.DB_STATUS.SYNCHRONIZING);
-
-        // PROPAGATE THE UPDATE TO ALL THE NODES
-//        iManager.sendRequest(databaseName, null, iManager.getActiveServers(),
-//            new OUpdateDatabaseStatusTask(databaseName, ODistributedServerManager.DB_STATUS.SYNCHRONIZING.name()),
-//            iManager.getNextMessageIdCounter(), ODistributedRequest.EXECUTION_MODE.RESPONSE, null, null);
 
         ODistributedServerLog
             .info(this, iManager.getLocalNodeName(), getNodeSource(), DIRECTION.OUT, "Deploying database %s...", databaseName);
@@ -112,7 +108,7 @@ public class OSyncDatabaseTask extends OAbstractSyncDatabaseTask {
               "Creating backup of database '%s' (compressionRate=%d) in directory: %s...", databaseName, compressionRate,
               backupFile.getAbsolutePath());
 
-          new Thread(new Runnable() {
+          Thread t = new Thread(new Runnable() {
             @Override
             public void run() {
               Thread.currentThread().setName("OrientDB SyncDatabase node=" + iManager.getLocalNodeName() + " db=" + databaseName);
@@ -158,7 +154,9 @@ public class OSyncDatabaseTask extends OAbstractSyncDatabaseTask {
                 }
               }
             }
-          }).start();
+          });
+          t.setUncaughtExceptionHandler(new OUncaughtExceptionHandler());
+          t.start();
 
           // RECORD LAST BACKUP TO BE REUSED IN CASE ANOTHER NODE ASK FOR THE SAME IN SHORT TIME WHILE THE DB IS NOT UPDATED
           ((ODistributedStorage) database.getStorage()).setLastValidBackup(backupFile);

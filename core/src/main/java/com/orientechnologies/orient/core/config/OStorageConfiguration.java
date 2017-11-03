@@ -21,6 +21,7 @@ package com.orientechnologies.orient.core.config;
 
 import com.orientechnologies.common.log.OLogManager;
 import com.orientechnologies.orient.core.Orient;
+import com.orientechnologies.orient.core.conflict.ORecordConflictStrategy;
 import com.orientechnologies.orient.core.conflict.ORecordConflictStrategyFactory;
 import com.orientechnologies.orient.core.exception.OSerializationException;
 import com.orientechnologies.orient.core.exception.OStorageException;
@@ -57,6 +58,7 @@ import java.util.concurrent.ConcurrentMap;
  * data segments</li>
  * <li>14 = no changes, but version was incremented</li>
  * <li>15 = introduced encryption and encryptionKey</li>
+ * <li>18 = we keep version of product release under which storage was created</li>
  * </ul>
  *
  * @author Luca Garulli (l.garulli--at--orientechnologies.com)
@@ -70,7 +72,7 @@ public class OStorageConfiguration implements OSerializableStream {
   public static final String DEFAULT_DATETIME_FORMAT = "yyyy-MM-dd HH:mm:ss";
 
   private String charset;
-  public static final int                              CURRENT_VERSION               = 17;
+  public static final int                              CURRENT_VERSION               = 18;
   public static final int                              CURRENT_BINARY_FORMAT_VERSION = 13;
   private final       List<OStorageEntryConfiguration> properties                    = new ArrayList<OStorageEntryConfiguration>();
   protected final transient  OStorage                               storage;
@@ -100,6 +102,11 @@ public class OStorageConfiguration implements OSerializableStream {
   private volatile transient boolean validation = true;
   private volatile boolean txRequiredForSQLGraphOperations;
 
+  /**
+   * Version of product release under which storage was created
+   */
+  private volatile String createdAtVersion;
+
   protected final Charset streamCharset;
 
   public OStorageConfiguration(final OStorage iStorage, Charset streamCharset) {
@@ -108,6 +115,13 @@ public class OStorageConfiguration implements OSerializableStream {
 
     initConfiguration();
     clear();
+  }
+
+  /**
+   * Sets version of product release under which storage was created.
+   */
+  public void setCreationVersion(String version) {
+    this.createdAtVersion = version;
   }
 
   public void initConfiguration() {
@@ -179,11 +193,6 @@ public class OStorageConfiguration implements OSerializableStream {
    * This method load the record information by the internal cluster segment. It's for compatibility with older database than
    * 0.9.25.
    *
-   * @param iProperties
-   *
-   * @return
-   *
-   * @throws OSerializationException
    * @compatibility 0.9.25
    */
   public OStorageConfiguration load(final Map<String, Object> iProperties) throws OSerializationException {
@@ -314,9 +323,11 @@ public class OStorageConfiguration implements OSerializableStream {
     }
 
     final ORecordConflictStrategyFactory conflictStrategyFactory = Orient.instance().getRecordConflictStrategy();
-    if (version >= 12)
-      conflictStrategy = conflictStrategyFactory.getStrategy(read(values[index++])).getName();
-    else
+    if (version >= 12) {
+      String strategyName = read(values[index++]);
+      ORecordConflictStrategy strategy = conflictStrategyFactory.getStrategy(strategyName);
+      conflictStrategy = strategy == null ? strategyName : strategy.getName();
+    } else
       conflictStrategy = conflictStrategyFactory.getDefaultStrategy();
 
     // @COMPATIBILITY
@@ -513,6 +524,10 @@ public class OStorageConfiguration implements OSerializableStream {
         indexEngines.put(name.toLowerCase(getLocaleInstance()), indexEngineData);
       }
     }
+
+    if (version > 17) {
+      createdAtVersion = read(values[index++]);
+    }
   }
 
   /**
@@ -656,6 +671,8 @@ public class OStorageConfiguration implements OSerializableStream {
         }
       }
     }
+
+    write(buffer, createdAtVersion);
 
     // PLAIN: ALLOCATE ENOUGH SPACE TO REUSE IT EVERY TIME
     buffer.append("|");

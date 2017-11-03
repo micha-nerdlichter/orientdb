@@ -58,10 +58,7 @@ import com.orientechnologies.orient.core.metadata.schema.OClass;
 import com.orientechnologies.orient.core.metadata.schema.OImmutableClass;
 import com.orientechnologies.orient.core.metadata.schema.OImmutableSchema;
 import com.orientechnologies.orient.core.metadata.schema.OType;
-import com.orientechnologies.orient.core.metadata.security.ORole;
-import com.orientechnologies.orient.core.metadata.security.ORule;
-import com.orientechnologies.orient.core.metadata.security.OSecurityShared;
-import com.orientechnologies.orient.core.metadata.security.OSecurityUser;
+import com.orientechnologies.orient.core.metadata.security.*;
 import com.orientechnologies.orient.core.record.ORecord;
 import com.orientechnologies.orient.core.record.ORecordInternal;
 import com.orientechnologies.orient.core.record.impl.ODocument;
@@ -619,8 +616,8 @@ public class OCommandExecutorSQLSelect extends OCommandExecutorSQLResultsetAbstr
           try {
             applyGroupBy(record, iContext);
             resultQueue.put(new AsyncResult(record, iContext));
-          } catch (InterruptedException e) {
-            Thread.interrupted();
+          } catch (InterruptedException ignore) {
+            Thread.currentThread().interrupt();
             return false;
           }
           tmpQueueOffer.incrementAndGet();
@@ -655,8 +652,7 @@ public class OCommandExecutorSQLSelect extends OCommandExecutorSQLResultsetAbstr
   /**
    * Handles the record in result.
    *
-   * @param iRecord  Record to handle
-   * @param iContext
+   * @param iRecord Record to handle
    *
    * @return false if limit has been reached, otherwise true
    */
@@ -686,8 +682,6 @@ public class OCommandExecutorSQLSelect extends OCommandExecutorSQLResultsetAbstr
   /**
    * Returns the temporary RID counter assuring it's unique per query tree.
    *
-   * @param iContext
-   *
    * @return Serial as integer
    */
   public int getTemporaryRIDCounter(final OCommandContext iContext) {
@@ -697,19 +691,27 @@ public class OCommandExecutorSQLSelect extends OCommandExecutorSQLResultsetAbstr
         serialTempRID.getAndIncrement();
   }
 
-  protected void checkForSystemClusters(final ODatabaseDocumentInternal iDatabase, final int[] iClusterIds) {
-    for (int clId : iClusterIds) {
-      if (clId < 0) {
-        continue;
-      }
-      final com.orientechnologies.orient.core.storage.OCluster cl = iDatabase.getStorage().getClusterById(clId);
-      if (cl != null && cl.isSystemCluster()) {
-        final OSecurityUser dbUser = iDatabase.getUser();
-        if (dbUser == null || dbUser.allow(ORule.ResourceGeneric.SYSTEM_CLUSTERS, null, ORole.PERMISSION_READ) != null)
-          // AUTHORIZED
-          break;
-      }
+  protected void checkForSystemClusters(final ODatabaseDocumentInternal iDatabase, final ORID rid) {
+    if (rid.getClusterId() < 0) {
+      return;
     }
+    final com.orientechnologies.orient.core.storage.OCluster cl = iDatabase.getStorage().getClusterById(rid.getClusterId());
+    if (cl != null && cl.isSystemCluster()) {
+      final OSecurityUser dbUser = iDatabase.getUser();
+      if (dbUser == null) {
+        return;
+      }
+      if (rid.equals(dbUser.getDocument().getIdentity())) {
+        return;
+      }
+      for (OSecurityRole role : dbUser.getRoles()) {
+        if (rid.equals(role.getDocument().getIdentity())) {
+          return;
+        }
+      }
+      dbUser.allow(ORule.ResourceGeneric.SYSTEM_CLUSTERS, null, ORole.PERMISSION_READ);
+    }
+    // AUTHORIZED
   }
 
   protected boolean addResult(OIdentifiable iRecord, final OCommandContext iContext) {
@@ -717,7 +719,7 @@ public class OCommandExecutorSQLSelect extends OCommandExecutorSQLResultsetAbstr
     if (iRecord == null)
       return true;
 
-    checkForSystemClusters(getDatabase(), new int[] { iRecord.getIdentity().getClusterId() });
+    checkForSystemClusters(getDatabase(), iRecord.getIdentity());
     if (projections != null || groupByFields != null && !groupByFields.isEmpty()) {
       if (!aggregate) {
         // APPLY PROJECTIONS IN LINE
@@ -876,8 +878,6 @@ public class OCommandExecutorSQLSelect extends OCommandExecutorSQLResultsetAbstr
 
   /**
    * Report the tip to the profiler and collect it in context to be reported by tools like Studio
-   *
-   * @param iMessage
    */
   protected void reportTip(final String iMessage) {
     Orient.instance().getProfiler().reportTip(iMessage);
@@ -1636,13 +1636,6 @@ public class OCommandExecutorSQLSelect extends OCommandExecutorSQLResultsetAbstr
       final OIdentifiable next = iTarget.next();
       if (!executeSearchRecord(next, context, false))
         return false;
-
-      if (tipActivated && browsed > queryScanThresholdWarning) {
-        reportTip(String.format(
-            "Query '%s' fetched more than %d records: to speed up the execution, create an index or change the query to use an existent index",
-            parserText, queryScanThresholdWarning));
-        tipActivated = false;
-      }
     }
     return true;
   }
@@ -1726,7 +1719,8 @@ public class OCommandExecutorSQLSelect extends OCommandExecutorSQLResultsetAbstr
             if (exceptions[current] == null) {
               exceptions[current] = new RuntimeException(e);
             }
-            e.printStackTrace();
+
+            OLogManager.instance().error(this, "Error during cluster scan", e);
           }
         }
       };
@@ -1763,8 +1757,8 @@ public class OCommandExecutorSQLSelect extends OCommandExecutorSQLResultsetAbstr
           }
         }
 
-      } catch (InterruptedException e) {
-        Thread.interrupted();
+      } catch (InterruptedException ignore) {
+        Thread.currentThread().interrupt();
         cancelQuery = true;
         break;
       }
@@ -1783,7 +1777,8 @@ public class OCommandExecutorSQLSelect extends OCommandExecutorSQLResultsetAbstr
         try {
           jobs.get(i).get();
           context.merge(contexts[i]);
-        } catch (InterruptedException e) {
+        } catch (InterruptedException ignore) {
+          Thread.currentThread().interrupt();
           break;
         } catch (final ExecutionException e) {
           OLogManager.instance().error(this, "Error on executing parallel query", e);
@@ -2579,7 +2574,11 @@ public class OCommandExecutorSQLSelect extends OCommandExecutorSQLResultsetAbstr
             if (r instanceof OIdentifiable) {
               ((Collection<OIdentifiable>) tempResult).add((OIdentifiable) r);
             } else if (r instanceof Iterator || OMultiValue.isMultiValue(r)) {
+              int i = 0;
               for (Object o : OMultiValue.getMultiValueIterable(r)) {
+                if ((++i) % 100 == 0 && !checkInterruption()) {
+                  return;
+                }
                 ((Collection<OIdentifiable>) tempResult).add((OIdentifiable) o);
               }
             }
@@ -2604,6 +2603,9 @@ public class OCommandExecutorSQLSelect extends OCommandExecutorSQLResultsetAbstr
         }
 
         for (OIdentifiable id : tempResult) {
+          if (!checkInterruption()) {
+            return;
+          }
           final Object fieldValue;
           if (expandTarget instanceof OSQLFilterItem) {
             fieldValue = ((OSQLFilterItem) expandTarget).getValue(id.getRecord(), null, context);

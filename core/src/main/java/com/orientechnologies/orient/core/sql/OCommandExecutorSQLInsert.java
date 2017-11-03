@@ -19,11 +19,9 @@
  */
 package com.orientechnologies.orient.core.sql;
 
+import com.orientechnologies.common.log.OLogManager;
 import com.orientechnologies.common.util.OPair;
-import com.orientechnologies.orient.core.command.OCommandDistributedReplicateRequest;
-import com.orientechnologies.orient.core.command.OCommandRequest;
-import com.orientechnologies.orient.core.command.OCommandRequestText;
-import com.orientechnologies.orient.core.command.OCommandResultListener;
+import com.orientechnologies.orient.core.command.*;
 import com.orientechnologies.orient.core.db.ODatabaseDocumentInternal;
 import com.orientechnologies.orient.core.db.document.ODatabaseDocument;
 import com.orientechnologies.orient.core.db.record.OIdentifiable;
@@ -65,7 +63,8 @@ public class OCommandExecutorSQLInsert extends OCommandExecutorSQLSetAware
   private List<ODocument>                queryResult      = null;
   private boolean                        unsafe           = false;
 
-  @SuppressWarnings("unchecked") public OCommandExecutorSQLInsert parse(final OCommandRequest iRequest) {
+  @SuppressWarnings("unchecked")
+  public OCommandExecutorSQLInsert parse(final OCommandRequest iRequest) {
     final OCommandRequestText textRequest = (OCommandRequestText) iRequest;
 
     String queryText = textRequest.getText();
@@ -100,7 +99,7 @@ public class OCommandExecutorSQLInsert extends OCommandExecutorSQLSetAware
         try {
           int clusterId = Integer.parseInt(clusterName);
           clusterName = database.getClusterNameById(clusterId);
-        } catch (Exception e) {
+        } catch (NumberFormatException ignore) {
           //not an integer
         }
       } else if (subjectName.startsWith(OCommandExecutorSQLAbstract.INDEX_PREFIX))
@@ -247,6 +246,9 @@ public class OCommandExecutorSQLInsert extends OCommandExecutorSQLSetAware
         saveRecord(doc);
         return prepareReturnItem(doc);
       } else if (subQuery != null) {
+        OBasicCommandContext subCtx = new OBasicCommandContext();
+        subCtx.setParent(this.context);
+        subQuery.setContext(subCtx);
         subQuery.execute();
         if (queryResult != null)
           return prepareReturnResult(queryResult);
@@ -257,11 +259,13 @@ public class OCommandExecutorSQLInsert extends OCommandExecutorSQLSetAware
     return null;
   }
 
-  @Override public OCommandDistributedReplicateRequest.DISTRIBUTED_EXECUTION_MODE getDistributedExecutionMode() {
+  @Override
+  public OCommandDistributedReplicateRequest.DISTRIBUTED_EXECUTION_MODE getDistributedExecutionMode() {
     return DISTRIBUTED_EXECUTION_MODE.LOCAL;
   }
 
-  @Override public Set<String> getInvolvedClusters() {
+  @Override
+  public Set<String> getInvolvedClusters() {
     if (className != null) {
       final OClass clazz = ((OMetadataInternal) getDatabase().getMetadata()).getImmutableSchemaSnapshot().getClass(className);
       return Collections.singleton(getDatabase().getClusterNameById(clazz.getClusterSelection().getCluster(clazz, null)));
@@ -271,19 +275,58 @@ public class OCommandExecutorSQLInsert extends OCommandExecutorSQLSetAware
     return Collections.EMPTY_SET;
   }
 
-  @Override public String getSyntax() {
+  @Override
+  public String getSyntax() {
     return "INSERT INTO [class:]<class>|cluster:<cluster>|index:<index> [(<field>[,]*) VALUES (<expression>[,]*)[,]*]|[SET <field> = <expression>|<sub-command>[,]*]|CONTENT {<JSON>} [RETURN <expression>] [FROM select-query]";
   }
 
-  @Override public boolean result(final Object iRecord) {
-    final ORecord rec = ((OIdentifiable) iRecord).getRecord().copy();
+  @Override
+  public boolean result(final Object iRecord) {
+    OClass oldClass = null;
+    ORecord oldRecord = ((OIdentifiable) iRecord).getRecord();
+    if (oldRecord instanceof ODocument) {
+      oldClass = ((ODocument) oldRecord).getSchemaClass();
+    }
+    final ORecord rec = oldRecord.copy();
 
     // RESET THE IDENTITY TO AVOID UPDATE
     rec.getIdentity().reset();
 
-    if (rec instanceof ODocument && className != null)
-      ((ODocument) rec).setClassName(className);
+    if (rec instanceof ODocument) {
 
+      ODocument doc = (ODocument) rec;
+      if (className != null) {
+        doc.setClassName(className);
+        doc.setTrackingChanges(true);
+      }
+
+      if (oldClass!=null && oldClass.isSubClassOf("V")) {
+        OLogManager.instance()
+            .warn(this, "WARNING: copying vertex record " + doc + " with INSERT/SELECT, the edge pointers won't be copied");
+        String[] fields = ((ODocument) rec).fieldNames();
+        for (String field : fields) {
+          if (field.startsWith("out_") || field.startsWith("in_")) {
+            Object edges = doc.field(field);
+            if (edges instanceof OIdentifiable) {
+              ODocument edgeRec = ((OIdentifiable) edges).getRecord();
+              if (edgeRec.getSchemaClass() != null && edgeRec.getSchemaClass().isSubClassOf("E")) {
+                doc.removeField(field);
+              }
+            } else if (edges instanceof Iterable) {
+              for (Object edge : (Iterable) edges) {
+                if (edge instanceof OIdentifiable) {
+                  ODocument edgeRec = ((OIdentifiable) edge).getRecord();
+                  if (edgeRec.getSchemaClass() != null && edgeRec.getSchemaClass().isSubClassOf("E")) {
+                    doc.removeField(field);
+                    break;
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
     rec.setDirty();
     synchronized (this) {
       saveRecord(rec);
@@ -294,7 +337,8 @@ public class OCommandExecutorSQLInsert extends OCommandExecutorSQLSetAware
     return true;
   }
 
-  @Override public void end() {
+  @Override
+  public void end() {
 
   }
 
@@ -414,10 +458,10 @@ public class OCommandExecutorSQLInsert extends OCommandExecutorSQLSetAware
       else if (f.getRoot().startsWith(":")) {
         // NAMED PARAMETER
         return commandParameters.getByName(f.getRoot().substring(1));
-      }else{
+      } else {
         return f.getValue(new ODocument(), null, context);
       }
-    }else if(parsedKey instanceof OSQLFunctionRuntime){
+    } else if (parsedKey instanceof OSQLFunctionRuntime) {
       OSQLFunctionRuntime f = (OSQLFunctionRuntime) parsedKey;
       return f.execute(null, null, null, context);
     }
@@ -438,11 +482,13 @@ public class OCommandExecutorSQLInsert extends OCommandExecutorSQLSetAware
     return (OIdentifiable) parsedRid;
   }
 
-  @Override public QUORUM_TYPE getQuorumType() {
+  @Override
+  public QUORUM_TYPE getQuorumType() {
     return QUORUM_TYPE.WRITE;
   }
 
-  @Override public Object getResult() {
+  @Override
+  public Object getResult() {
     return null;
   }
 }

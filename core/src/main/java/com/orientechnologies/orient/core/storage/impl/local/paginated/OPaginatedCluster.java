@@ -66,8 +66,6 @@ public class OPaginatedCluster extends ODurableComponent implements OCluster {
     NOT_EXISTENT, PRESENT, ALLOCATED, REMOVED
   }
 
-  private final boolean addRidMetadata = OGlobalConfiguration.STORAGE_TRACK_CHANGED_RECORDS_IN_WAL.getValueAsBoolean();
-
   public static final  String DEF_EXTENSION            = ".pcl";
   private static final int    DISK_PAGE_SIZE           = DISK_CACHE_PAGE_SIZE.getValueAsInteger();
   private static final int    LOWEST_FREELIST_BOUNDARY = PAGINATED_STORAGE_LOWEST_FREELIST_BOUNDARY.getValueAsInteger();
@@ -256,6 +254,31 @@ public class OPaginatedCluster extends ODurableComponent implements OCluster {
     }
   }
 
+  public void replaceClusterMapFile(File file) throws IOException {
+    startOperation();
+    try {
+      acquireExclusiveLock();
+      try {
+        final String newFileName = file.getName() + "$temp";
+
+        final File rootDir = new File(storageLocal.getConfiguration().getDirectory());
+        final File newFile = new File(rootDir, newFileName);
+
+        OFileUtils.copyFile(file, newFile);
+
+        final long newFileId = writeCache.loadFile(newFileName);
+
+        readCache.deleteFile(clusterPositionMap.getFileId(), writeCache);
+        clusterPositionMap.replaceFileId(newFileId);
+        writeCache.renameFile(clusterPositionMap.getFileId(), newFileName, clusterPositionMap.getFullName());
+      } finally {
+        releaseExclusiveLock();
+      }
+    } finally {
+      completeOperation();
+    }
+  }
+
   @Override
   public void close() throws IOException {
     close(true);
@@ -334,12 +357,11 @@ public class OPaginatedCluster extends ODurableComponent implements OCluster {
             throw new IllegalArgumentException(
                 "Cannot change compression setting on cluster '" + getName() + "' because it is not empty");
           setCompressionInternal(stringValue,
-              ODatabaseRecordThreadLocal.INSTANCE.get().getStorage().getConfiguration().getContextConfiguration()
+              ODatabaseRecordThreadLocal.instance().get().getStorage().getConfiguration().getContextConfiguration()
                   .getValueAsString(OGlobalConfiguration.STORAGE_ENCRYPTION_KEY));
           break;
         case CONFLICTSTRATEGY:
-          setRecordConflictStrategy(stringValue);
-          break;
+          return setRecordConflictStrategy(stringValue);
         case STATUS: {
           if (stringValue == null)
             throw new IllegalStateException("Value of attribute is null");
@@ -352,7 +374,7 @@ public class OPaginatedCluster extends ODurableComponent implements OCluster {
             throw new IllegalArgumentException(
                 "Cannot change encryption setting on cluster '" + getName() + "' because it is not empty");
           setEncryptionInternal(stringValue,
-              ODatabaseRecordThreadLocal.INSTANCE.get().getStorage().getConfiguration().getContextConfiguration()
+              ODatabaseRecordThreadLocal.instance().get().getStorage().getConfiguration().getContextConfiguration()
                   .getValueAsString(OGlobalConfiguration.STORAGE_ENCRYPTION_KEY));
           break;
         default:
@@ -614,8 +636,8 @@ public class OPaginatedCluster extends ODurableComponent implements OCluster {
     return recordCreationResult;
   }
 
-  private void addAtomicOperationMetadata(ORID rid, OAtomicOperation atomicOperation) {
-    if (!addRidMetadata)
+  private void addAtomicOperationMetadata(final ORID rid, final OAtomicOperation atomicOperation) {
+    if (!OGlobalConfiguration.STORAGE_TRACK_CHANGED_RECORDS_IN_WAL.getValueAsBoolean())
       return;
 
     if (atomicOperation == null)
@@ -632,7 +654,7 @@ public class OPaginatedCluster extends ODurableComponent implements OCluster {
     recordOperationMetadata.addRid(rid);
   }
 
-  private static int getEntryContentLength(int grownContentSize) {
+  private static int getEntryContentLength(final int grownContentSize) {
     return grownContentSize + 2 * OByteSerializer.BYTE_SIZE + OIntegerSerializer.INT_SIZE + OLongSerializer.LONG_SIZE;
   }
 
@@ -1695,10 +1717,11 @@ public class OPaginatedCluster extends ODurableComponent implements OCluster {
     return recordConflictStrategy;
   }
 
-  private void setRecordConflictStrategy(final String stringValue) {
+  private String setRecordConflictStrategy(final String stringValue) {
     recordConflictStrategy = Orient.instance().getRecordConflictStrategy().getStrategy(stringValue);
     config.conflictStrategy = stringValue;
     storageLocal.getConfiguration().update();
+    return recordConflictStrategy == null ? null : recordConflictStrategy.getName();
   }
 
   private void updateClusterState(long fileId, long pinnedStateEntryIndex, long sizeDiff, long recordsSizeDiff,
@@ -2265,4 +2288,5 @@ public class OPaginatedCluster extends ODurableComponent implements OCluster {
       this.recordVersion = recordVersion;
     }
   }
+
 }

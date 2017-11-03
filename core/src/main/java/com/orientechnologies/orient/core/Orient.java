@@ -27,6 +27,7 @@ import com.orientechnologies.common.log.OLogManager;
 import com.orientechnologies.common.parser.OSystemVariableResolver;
 import com.orientechnologies.common.profiler.OProfiler;
 import com.orientechnologies.common.profiler.OProfilerStub;
+import com.orientechnologies.common.thread.OThreadPoolExecutorWithLogging;
 import com.orientechnologies.common.util.OClassLoaderHelper;
 import com.orientechnologies.orient.core.cache.OLocalRecordCacheFactory;
 import com.orientechnologies.orient.core.cache.OLocalRecordCacheFactoryImpl;
@@ -95,7 +96,12 @@ public class Orient extends OListenerManger<OOrientListener> {
   private final OLocalRecordCacheFactory localRecordCache = new OLocalRecordCacheFactoryImpl();
 
   static {
-    instance.startup();
+    try {
+      instance.startup();
+    } catch (Throwable t) {
+      OLogManager.instance().errorNoDb(Orient.class, "Error during initialization of OrientDB engine", t);
+    }
+
   }
 
   private final String os;
@@ -206,6 +212,7 @@ public class Orient extends OListenerManger<OOrientListener> {
         timer = new Timer(true);
 
       profiler = new OProfilerStub();
+      profiler.startup();
 
       shutdownHook = new OrientShutdownHook();
       if (signalHandler == null) {
@@ -215,19 +222,20 @@ public class Orient extends OListenerManger<OOrientListener> {
 
       final int cores = Runtime.getRuntime().availableProcessors();
 
-      workers = new ThreadPoolExecutor(cores, cores * 3, 10, TimeUnit.SECONDS, new LinkedBlockingQueue<Runnable>(cores * 500) {
-        @Override
-        public boolean offer(Runnable e) {
-          // turn offer() and add() into a blocking calls (unless interrupted)
-          try {
-            put(e);
-            return true;
-          } catch (InterruptedException ie) {
-            Thread.currentThread().interrupt();
-          }
-          return false;
-        }
-      });
+      workers = new OThreadPoolExecutorWithLogging(cores, cores * 3, 10, TimeUnit.SECONDS,
+          new LinkedBlockingQueue<Runnable>(cores * 500) {
+            @Override
+            public boolean offer(Runnable e) {
+              // turn offer() and add() into a blocking calls (unless interrupted)
+              try {
+                put(e);
+                return true;
+              } catch (InterruptedException ignore) {
+                Thread.currentThread().interrupt();
+              }
+              return false;
+            }
+          });
 
       registerEngines();
 
@@ -310,7 +318,9 @@ public class Orient extends OListenerManger<OOrientListener> {
         registerEngine(engine);
       } catch (IllegalArgumentException e) {
         if (engine != null)
-          OLogManager.instance().debug(this, "Failed to replace engine " + engine.getName());
+          OLogManager.instance().debug(this, "Failed to replace engine " + engine.getName(), e);
+        else
+          OLogManager.instance().debug(this, "Failed to replace engine ", e);
       }
     }
   }
@@ -330,7 +340,7 @@ public class Orient extends OListenerManger<OOrientListener> {
           handler.shutdown();
           OLogManager.instance().debug(this, "Shutdown handler %s completed", handler);
         } catch (Exception e) {
-          OLogManager.instance().error(this, "Exception during calling of shutdown handler %s", handler);
+          OLogManager.instance().error(this, "Exception during calling of shutdown handler %s", e, handler);
         }
       }
 
@@ -511,10 +521,10 @@ public class Orient extends OListenerManger<OOrientListener> {
       } else
         dbPath = iURL;
 
-      if (registerDatabaseByPath) {
+      if (registerDatabaseByPath && !engine.getName().equals("remote")) {
         try {
           dbPath = new File(dbPath).getCanonicalPath();
-        } catch (IOException e) {
+        } catch (IOException ignore) {
           // IGNORE IT
         }
       }
@@ -609,8 +619,8 @@ public class Orient extends OListenerManger<OOrientListener> {
   }
 
   /**
-   * Obtains a {@link OEngine#isRunning() running} {@link OEngine engine} instance with the given {@code engineName}.
-   * If engine is not running, starts it.
+   * Obtains a {@link OEngine#isRunning() running} {@link OEngine engine} instance with the given {@code engineName}. If engine is
+   * not running, starts it.
    *
    * @param engineName the name of the engine to obtain.
    *
@@ -909,7 +919,8 @@ public class Orient extends OListenerManger<OOrientListener> {
       workers.shutdown();
       try {
         workers.awaitTermination(2, TimeUnit.MINUTES);
-      } catch (InterruptedException e) {
+      } catch (InterruptedException ignore) {
+        Thread.currentThread().interrupt();
       }
     }
 
@@ -971,7 +982,8 @@ public class Orient extends OListenerManger<OOrientListener> {
 
     @Override
     public String toString() {
-      return getClass().getSimpleName();
+      //it is strange but windows defender block compilation if we get class name programmatically using Class instance
+      return "OShutdownPendingThreadsHandler";
     }
   }
 

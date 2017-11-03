@@ -23,6 +23,7 @@ import com.orientechnologies.common.concur.lock.OLockException;
 import com.orientechnologies.common.io.OFileUtils;
 import com.orientechnologies.common.log.OLogManager;
 import com.orientechnologies.common.util.OCollections;
+import com.orientechnologies.common.util.OUncaughtExceptionHandler;
 import com.orientechnologies.orient.core.Orient;
 import com.orientechnologies.orient.core.command.OCommandDistributedReplicateRequest;
 import com.orientechnologies.orient.core.compression.impl.OZIPCompressionUtil;
@@ -94,7 +95,8 @@ public class OSyncClusterTask extends OAbstractReplicatedTask {
         ODistributedServerLog
             .info(this, iManager.getLocalNodeName(), getNodeSource(), DIRECTION.OUT, "deploying cluster %s...", databaseName);
 
-        final File backupFile = new File(Orient.getTempPath() + "/backup_" + databaseName + "_" + clusterName + ".zip");
+        final File backupFile = new File(
+            Orient.getTempPath() + "/backup_" + databaseName + "_" + clusterName + "_server" + iManager.getLocalNodeId() + ".zip");
         if (backupFile.exists())
           backupFile.delete();
         else
@@ -117,7 +119,7 @@ public class OSyncClusterTask extends OAbstractReplicatedTask {
           if (completedFile.exists())
             completedFile.delete();
 
-          new Thread(new Runnable() {
+          Thread t = new Thread(new Runnable() {
             @Override
             public void run() {
               Thread.currentThread().setName(
@@ -136,20 +138,6 @@ public class OSyncClusterTask extends OAbstractReplicatedTask {
                   // COPY PCL AND CPM FILE
                   fileNames.add(fileName);
                   fileNames.add(fileName.substring(0, fileName.length() - 4) + OClusterPositionMap.DEF_EXTENSION);
-
-                  final OClass clazz = database.getMetadata().getSchema().getClassByClusterId(cluster.getId());
-                  if (clazz != null) {
-                    // CHECK FOR AUTO-SHARDED INDEXES
-                    final OIndex<?> asIndex = clazz.getAutoShardingIndex();
-                    if (asIndex != null) {
-                      final int partition = OCollections.indexOf(clazz.getClusterIds(), cluster.getId());
-                      final String indexName = asIndex.getName();
-                      fileNames.add(indexName + "_" + partition + OAutoShardingIndexEngine.SUBINDEX_METADATA_FILE_EXTENSION);
-                      fileNames.add(indexName + "_" + partition + OAutoShardingIndexEngine.SUBINDEX_TREE_FILE_EXTENSION);
-                      fileNames.add(indexName + "_" + partition + OAutoShardingIndexEngine.SUBINDEX_BUCKET_FILE_EXTENSION);
-                      fileNames.add(indexName + "_" + partition + OAutoShardingIndexEngine.SUBINDEX_NULL_BUCKET_FILE_EXTENSION);
-                    }
-                  }
 
                   OZIPCompressionUtil.compressFiles(dbPath, fileNames.toArray(new String[fileNames.size()]), fileOutputStream, null,
                       OGlobalConfiguration.DISTRIBUTED_DEPLOYDB_TASK_COMPRESSION.getValueAsInteger());
@@ -173,7 +161,9 @@ public class OSyncClusterTask extends OAbstractReplicatedTask {
                 }
               }
             }
-          }).start();
+          });
+          t.setUncaughtExceptionHandler(new OUncaughtExceptionHandler());
+          t.start();
 
           // TODO: SUPPORT BACKUP ON CLUSTER
           final long fileSize = backupFile.length();

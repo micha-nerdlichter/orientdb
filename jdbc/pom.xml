@@ -23,7 +23,7 @@
     <parent>
         <groupId>com.orientechnologies</groupId>
         <artifactId>orientdb-parent</artifactId>
-        <version>2.2.23-SNAPSHOT</version>
+        <version>2.2.30-SNAPSHOT</version>
         <relativePath>../</relativePath>
     </parent>
 
@@ -38,7 +38,7 @@
         <argLine>
             -XX:MaxDirectMemorySize=512g
             -Dmemory.directMemory.trackMode=true
-            -Djava.util.logging.manager=com.orientechnologies.common.log.OLogManager$DebugLogManager
+            -Djava.util.logging.manager=com.orientechnologies.common.log.OLogManager$ShutdownLogManager
             -Dstorage.diskCache.checksumMode=storeAndThrow
         </argLine>
     </properties>
@@ -92,7 +92,6 @@
             </plugin>
             <plugin>
                 <artifactId>maven-assembly-plugin</artifactId>
-                <version>2.6</version>
                 <configuration>
                     <descriptors>
                         <descriptor>src/assembly/all.xml</descriptor>

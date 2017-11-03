@@ -23,12 +23,10 @@ import com.orientechnologies.common.concur.lock.OInterruptedException;
 import com.orientechnologies.common.exception.OException;
 import com.orientechnologies.common.exception.OSystemException;
 import com.orientechnologies.common.log.OLogManager;
+import com.orientechnologies.common.util.OMemory;
 import com.orientechnologies.orient.core.OOrientShutdownListener;
-import com.orientechnologies.orient.core.OOrientStartupListener;
 import com.orientechnologies.orient.core.Orient;
 import com.orientechnologies.orient.core.config.OGlobalConfiguration;
-import sun.misc.Cleaner;
-import sun.nio.ch.DirectBuffer;
 
 import javax.management.*;
 import java.io.PrintWriter;
@@ -36,6 +34,8 @@ import java.io.StringWriter;
 import java.lang.management.ManagementFactory;
 import java.lang.ref.ReferenceQueue;
 import java.lang.ref.WeakReference;
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Method;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.util.*;
@@ -57,7 +57,32 @@ import java.util.logging.LogManager;
  *
  * @see OGlobalConfiguration#MEMORY_CHUNK_SIZE
  */
-public class OByteBufferPool implements OOrientStartupListener, OOrientShutdownListener, OByteBufferPoolMXBean {
+public class OByteBufferPool implements OOrientShutdownListener, OByteBufferPoolMXBean {
+  /**
+   * Instance of class which is used to clean direct byte buffers
+   */
+  private static final Class<?> cleaner;
+
+  /**
+   * Method which is associated with Cleaner.clean method.
+   */
+  private static final Method clean;
+
+  /**
+   * Instance of interface which is used to access {@link #cleaner} class.
+   */
+  private static final Class<?> directBuffer;
+
+  /**
+   * Method which is associated with DirectBuffer.cleaner method.
+   */
+  private static final Method getCleaner;
+
+  /**
+   * Method which is associated with DirectBuffer.attachment method.
+   */
+  private static final Method attachment;
+
   /**
    * {@link OByteBufferPool}'s MBean name.
    */
@@ -133,6 +158,55 @@ public class OByteBufferPool implements OOrientStartupListener, OOrientShutdownL
   private final Map<TrackedBufferKey, TrackedBufferReference> trackedBuffers;
   private final Map<TrackedBufferKey, Exception>              trackedReleases;
 
+  static {
+    //Java 9 does not allow to use those classes so we need to perform a hack.
+    Class<?> cleanerClass = null;
+    Class<?> directBufferClass = null;
+
+    Method cleanMethod = null;
+    Method getCleanerMethod = null;
+    Method attachmentMethod = null;
+
+    try {
+      cleanerClass = Class.forName("sun.misc.Cleaner");
+      cleanMethod = cleanerClass.getDeclaredMethod("clean");
+      cleanMethod.setAccessible(true);
+    } catch (ClassNotFoundException ignore) {
+      cleanerClass = null;
+      cleanMethod = null;
+    } catch (NoSuchMethodException ignore) {
+      cleanerClass = null;
+      cleanMethod = null;
+    } catch (SecurityException ignore) {
+      cleanerClass = null;
+      cleanMethod = null;
+    }
+
+    try {
+      directBufferClass = Class.forName("sun.nio.ch.DirectBuffer");
+      getCleanerMethod = directBufferClass.getDeclaredMethod("cleaner");
+      getCleanerMethod.setAccessible(true);
+
+      attachmentMethod = directBufferClass.getDeclaredMethod("attachment");
+      attachmentMethod.setAccessible(true);
+    } catch (ClassNotFoundException ignore) {
+      directBufferClass = null;
+      getCleanerMethod = null;
+    } catch (NoSuchMethodException ignore) {
+      directBufferClass = null;
+      getCleanerMethod = null;
+    } catch (SecurityException ignore) {
+      directBufferClass = null;
+      getCleanerMethod = null;
+    }
+
+    cleaner = cleanerClass;
+    directBuffer = directBufferClass;
+    getCleaner = getCleanerMethod;
+    clean = cleanMethod;
+    attachment = attachmentMethod;
+  }
+
   /**
    * @param pageSize Size of single page (instance of <code>DirectByteBuffer</code>) returned by pool.
    */
@@ -176,7 +250,6 @@ public class OByteBufferPool implements OOrientStartupListener, OOrientShutdownL
       trackedReleases = null;
     }
 
-    Orient.instance().registerWeakOrientStartupListener(this);
     Orient.instance().registerWeakOrientShutdownListener(this);
   }
 
@@ -214,7 +287,8 @@ public class OByteBufferPool implements OOrientStartupListener, OOrientShutdownL
 
   /**
    * Acquires direct memory buffer. If there is free (already released) direct memory buffer we reuse it, otherwise either new
-   * memory chunk is allocated from direct memory or slice of already preallocated memory chunk is used as new byte buffer instance.
+   * memory chunk is allocated from direct memory or slice of already preallocated memory chunk is used as new byte buffer
+   * instance.
    * <p>
    * If we reached maximum amount of preallocated memory chunks then small portion of direct memory equals to page size is
    * allocated. Byte order of returned direct memory buffer equals to native byte order.
@@ -264,7 +338,15 @@ public class OByteBufferPool implements OOrientStartupListener, OOrientShutdownL
 
       //allocation size should be the same for all buffers from chuck with the same index
       final int allocationSize = (int) Math
-          .min(maxPagesPerSingleArea * pageSize, (preAllocationLimit - bufferIndex * maxPagesPerSingleArea) * pageSize);
+          .min(maxPagesPerSingleArea * pageSize, preAllocationLimit - ((long) bufferIndex * maxPagesPerSingleArea * pageSize));
+
+      //page is going to be allocated above the preallocation limit
+      if (allocationSize <= position * pageSize) {
+        overflowBufferCount.incrementAndGet();
+        allocatedMemory.getAndAdd(pageSize);
+
+        return trackBuffer(ByteBuffer.allocateDirect(pageSize).order(ByteOrder.nativeOrder()));
+      }
 
       // we cannot free chunk of allocated memory so we set place holder first
       // if operation successful we allocate part of direct memory.
@@ -498,13 +580,9 @@ public class OByteBufferPool implements OOrientStartupListener, OOrientShutdownL
         if (release != null)
           builder.append("released from: ").append('\n').append(getStackTraceAsString(release)).append('\n');
 
-        OLogManager.instance().error(this, builder.toString());
+        OLogManager.instance().error(this, builder.toString(), null);
       }
     }
-  }
-
-  @Override
-  public void onStartup() {
   }
 
   @Override
@@ -513,7 +591,7 @@ public class OByteBufferPool implements OOrientStartupListener, OOrientShutdownL
     try {
       for (ByteBuffer byteBuffer : pool)
         clean(byteBuffer, cleaned);
-    } catch (Throwable t) {
+    } catch (Throwable ignore) {
       return;
     }
 
@@ -544,10 +622,36 @@ public class OByteBufferPool implements OOrientStartupListener, OOrientShutdownL
   }
 
   private void clean(ByteBuffer buffer, Set<ByteBuffer> cleaned) {
+    if (cleaner == null || directBuffer == null)
+      return;
+
     final ByteBuffer directByteBufferWithCleaner = findDirectByteBufferWithCleaner(buffer, 16);
     if (directByteBufferWithCleaner != null && !cleaned.contains(directByteBufferWithCleaner)) {
+      final Object cleaner;
+      if (getCleaner == null)
+        return;
+
+      try {
+        cleaner = getCleaner.invoke(directByteBufferWithCleaner);
+      } catch (IllegalAccessException ignore) {
+        return;
+      } catch (InvocationTargetException ignore) {
+        return;
+      }
+
+      if (clean == null)
+        return;
+
+      try {
+        clean.invoke(cleaner);
+      } catch (IllegalAccessException ignore) {
+        return;
+      } catch (InvocationTargetException ignore) {
+        return;
+      }
+
       cleaned.add(directByteBufferWithCleaner);
-      ((DirectBuffer) directByteBufferWithCleaner).cleaner().clean();
+
       if (TRACK)
         OLogManager.instance().info(this, "DIRECT-TRACK: cleaned " + directByteBufferWithCleaner);
     }
@@ -557,19 +661,40 @@ public class OByteBufferPool implements OOrientStartupListener, OOrientShutdownL
     if (depthLimit == 0)
       return null;
 
-    if (!(buffer instanceof DirectBuffer))
+    if (directBuffer == null || !(directBuffer.isAssignableFrom(buffer.getClass())))
       return null;
-    final DirectBuffer directBuffer = (DirectBuffer) buffer;
 
-    final Cleaner cleaner = directBuffer.cleaner();
+    if (getCleaner == null)
+      return null;
+
+    final Object cleaner;
+    try {
+      cleaner = getCleaner.invoke(buffer);
+    } catch (IllegalAccessException ignore) {
+      return null;
+    } catch (InvocationTargetException ignore) {
+      return null;
+    }
+
     if (cleaner != null)
       return buffer;
 
-    final Object attachment = directBuffer.attachment();
-    if (!(attachment instanceof ByteBuffer))
+    if (attachment == null)
       return null;
 
-    return findDirectByteBufferWithCleaner((ByteBuffer) attachment, depthLimit - 1);
+    final Object att;
+    try {
+      att = attachment.invoke(buffer);
+    } catch (IllegalAccessException ignore) {
+      return null;
+    } catch (InvocationTargetException ignore) {
+      return null;
+    }
+
+    if (!(att instanceof ByteBuffer))
+      return null;
+
+    return findDirectByteBufferWithCleaner((ByteBuffer) att, depthLimit - 1);
   }
 
   private static final class BufferHolder {
@@ -656,7 +781,7 @@ public class OByteBufferPool implements OOrientStartupListener, OOrientShutdownL
   private static boolean logInAssertion() {
     boolean assertionsEnabled = false;
     assert assertionsEnabled = true;
-    return assertionsEnabled && !(LogManager.getLogManager() instanceof OLogManager.DebugLogManager);
+    return assertionsEnabled && !(LogManager.getLogManager() instanceof OLogManager.ShutdownLogManager);
   }
 
   private static void log(StringBuilder builder, final Object from, final String message, final Throwable exception,
@@ -722,6 +847,7 @@ public class OByteBufferPool implements OOrientStartupListener, OOrientShutdownL
     private static final OByteBufferPool INSTANCE;
 
     static {
+      OMemory.fixCommonConfigurationProblems();
       // page size in bytes
       final int pageSize = OGlobalConfiguration.DISK_CACHE_PAGE_SIZE.getValueAsInteger() * 1024;
 

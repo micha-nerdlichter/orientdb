@@ -27,6 +27,8 @@ import com.orientechnologies.common.io.OFileUtils;
 import com.orientechnologies.common.io.OIOUtils;
 import com.orientechnologies.common.log.OLogManager;
 import com.orientechnologies.common.parser.OSystemVariableResolver;
+import com.orientechnologies.common.util.OCallable;
+import com.orientechnologies.common.util.OUncaughtExceptionHandler;
 import com.orientechnologies.orient.core.command.OCommandOutputListener;
 import com.orientechnologies.orient.core.compression.impl.OZIPCompressionUtil;
 import com.orientechnologies.orient.core.config.OGlobalConfiguration;
@@ -38,6 +40,7 @@ import com.orientechnologies.orient.core.exception.OStorageException;
 import com.orientechnologies.orient.core.index.engine.OHashTableIndexEngine;
 import com.orientechnologies.orient.core.index.engine.OSBTreeIndexEngine;
 import com.orientechnologies.orient.core.metadata.OMetadataDefault;
+import com.orientechnologies.orient.core.storage.OChecksumMode;
 import com.orientechnologies.orient.core.storage.cache.OReadCache;
 import com.orientechnologies.orient.core.storage.cache.local.OWOWCache;
 import com.orientechnologies.orient.core.storage.cache.local.twoq.O2QCache;
@@ -51,6 +54,8 @@ import com.orientechnologies.orient.core.storage.impl.local.paginated.wal.OLogSe
 import com.orientechnologies.orient.core.storage.impl.local.paginated.wal.OWriteAheadLog;
 
 import java.io.*;
+import java.nio.file.Files;
+import java.nio.file.StandardCopyOption;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
@@ -223,9 +228,8 @@ public class OLocalPaginatedStorage extends OAbstractPaginatedStorage implements
 
         final OutputStream bo = bufferSize > 0 ? new BufferedOutputStream(out, bufferSize) : out;
         try {
-          return OZIPCompressionUtil
-              .compressDirectory(new File(getStoragePath()).getAbsolutePath(), bo, new String[] { ".wal", ".fl" }, iOutput,
-                  compressionLevel);
+          return OZIPCompressionUtil.compressDirectory(new File(getStoragePath()).getAbsolutePath(), bo,
+              new String[] { ".wal", ".fl", O2QCache.CACHE_STATISTIC_FILE_EXTENSION }, iOutput, compressionLevel);
         } finally {
           if (bufferSize > 0) {
             bo.flush();
@@ -253,23 +257,41 @@ public class OLocalPaginatedStorage extends OAbstractPaginatedStorage implements
 
       File dbDir = new File(OIOUtils.getPathFromDatabaseName(OSystemVariableResolver.resolveSystemVariables(url)));
       final File[] storageFiles = dbDir.listFiles();
-      // TRY TO DELETE ALL THE FILES
-      for (File f : storageFiles) {
-        // DELETE ONLY THE SUPPORTED FILES
-        for (String ext : ALL_FILE_EXTENSIONS)
-          if (f.getPath().endsWith(ext)) {
-            f.delete();
-            break;
-          }
+      if(storageFiles != null) {
+        // TRY TO DELETE ALL THE FILES
+        for (File f : storageFiles) {
+          // DELETE ONLY THE SUPPORTED FILES
+          for (String ext : ALL_FILE_EXTENSIONS)
+            if (f.getPath().endsWith(ext)) {
+              f.delete();
+              break;
+            }
+        }
       }
 
       OZIPCompressionUtil.uncompressDirectory(in, getStoragePath(), iListener);
+
+      final File cacheStateFile = new File(getStoragePath() + File.separator + O2QCache.CACHE_STATE_FILE);
+      if (cacheStateFile.exists()) {
+        String message = "the cache state file (" + O2QCache.CACHE_STATE_FILE + ") is found in the backup, deleting the file";
+        OLogManager.instance().warn(this, message);
+        if (iListener != null)
+          iListener.onMessage('\n' + message);
+
+        if (!cacheStateFile.delete()) {
+          message =
+              "unable to delete the backed up cache state file (" + O2QCache.CACHE_STATE_FILE + "), please delete it manually";
+          OLogManager.instance().warn(this, message);
+          if (iListener != null)
+            iListener.onMessage('\n' + message);
+        }
+      }
 
       if (callable != null)
         try {
           callable.call();
         } catch (Exception e) {
-          OLogManager.instance().error(this, "Error on calling callback on database restore");
+          OLogManager.instance().error(this, "Error on calling callback on database restore", e);
         }
 
       open(null, null, null);
@@ -444,7 +466,6 @@ public class OLocalPaginatedStorage extends OAbstractPaginatedStorage implements
           throw new OStorageException("Cannot terminate full checkpoint task");
       }
     } catch (InterruptedException e) {
-      Thread.interrupted();
       throw OException.wrapException(new OStorageException("Error on closing of storage '" + name), e);
     }
   }
@@ -482,7 +503,7 @@ public class OLocalPaginatedStorage extends OAbstractPaginatedStorage implements
           if (!dbDir.delete())
             OLogManager.instance().error(this,
                 "Cannot delete storage directory with path " + dbDir.getAbsolutePath() + " because directory is not empty. Files: "
-                    + Arrays.toString(dbDir.listFiles()));
+                    + Arrays.toString(dbDir.listFiles()), null);
           return;
         }
       } else
@@ -579,10 +600,12 @@ public class OLocalPaginatedStorage extends OAbstractPaginatedStorage implements
     final OWOWCache wowCache = new OWOWCache(false, OGlobalConfiguration.DISK_CACHE_PAGE_SIZE.getValueAsInteger() * ONE_KB,
         OByteBufferPool.instance(), OGlobalConfiguration.DISK_WRITE_CACHE_PAGE_TTL.getValueAsLong() * 1000, writeAheadLog,
         OGlobalConfiguration.DISK_WRITE_CACHE_PAGE_FLUSH_INTERVAL.getValueAsInteger(), writeCacheSize, diskCacheSize, this, true,
-        files, getId());
+        files, getId(), OGlobalConfiguration.STORAGE_CHECKSUM_MODE.getValueAsEnum(OChecksumMode.class));
+
     wowCache.loadRegisteredFiles();
     wowCache.addLowDiskSpaceListener(this);
     wowCache.addBackgroundExceptionListener(this);
+    wowCache.addPageIsBrokenListener(this);
 
     writeCache = wowCache;
   }
@@ -591,11 +614,22 @@ public class OLocalPaginatedStorage extends OAbstractPaginatedStorage implements
     return new File(path + "/" + OMetadataDefault.CLUSTER_INTERNAL_NAME + OPaginatedCluster.DEF_EXTENSION).exists();
   }
 
+  public void closeAndMove(OCallable<Void, String> mover) {
+    stateLock.acquireWriteLock();
+    try {
+      this.close(true, false);
+      mover.call(this.storagePath);
+    } finally {
+      stateLock.releaseWriteLock();
+    }
+  }
+
   private static class FullCheckpointThreadFactory implements ThreadFactory {
     @Override
     public Thread newThread(Runnable r) {
       Thread thread = new Thread(r);
       thread.setDaemon(true);
+      thread.setUncaughtExceptionHandler(new OUncaughtExceptionHandler());
       return thread;
     }
   }

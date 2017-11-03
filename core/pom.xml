@@ -19,7 +19,7 @@
     <parent>
         <groupId>com.orientechnologies</groupId>
         <artifactId>orientdb-parent</artifactId>
-        <version>2.2.23-SNAPSHOT</version>
+        <version>2.2.30-SNAPSHOT</version>
         <relativePath>../</relativePath>
     </parent>
 
@@ -39,6 +39,8 @@
             com.sun.jna;resolution:=optional,
             org.xerial.snappy;resolution:=optional,
             sun.nio.ch;resolution:=optional,
+            com.orientechnologies.orient.server.distributed.impl;resolution:=optional,
+            com.orientechnologies.orient.server.distributed.impl.task;resolution:=optional,
             *
         </osgi.import>
         <osgi.export>com.orientechnologies.orient.core.*,
@@ -59,7 +61,7 @@
             -Ddb.makeFullCheckpointOnSchemaChange=false
             -Dsecurity.userPasswordSaltIterations=10
             -Dmemory.directMemory.trackMode=true
-            -Djava.util.logging.manager=com.orientechnologies.common.log.OLogManager$DebugLogManager
+            -Djava.util.logging.manager=com.orientechnologies.common.log.OLogManager$ShutdownLogManager
             -Dstorage.diskCache.checksumMode=storeAndThrow
         </argLine>
     </properties>
@@ -82,6 +84,8 @@
                 <exclude.test.9>**/SBTreeWALTest.java</exclude.test.9>
                 <exclude.test.10>**/LocalPaginatedClusterWithWALTest.java</exclude.test.10>
                 <exclude.test.11>**/OSBTreeBonsaiWALTest.java</exclude.test.11>
+                <exclude.test.12>**/InvalidRemovedFileIdsTest.java</exclude.test.12>
+                <exclude.test.13>**/OStorageTest.java</exclude.test.13>
             </properties>
         </profile>
 
@@ -105,6 +109,8 @@
                 <exclude.test.9>empty.java</exclude.test.9>
                 <exclude.test.10>empty.java</exclude.test.10>
                 <exclude.test.11>empty.java</exclude.test.11>
+                <exclude.test.12>empty.java</exclude.test.12>
+                <exclude.test.13>empty.java</exclude.test.13>
             </properties>
 
         </profile>
@@ -128,6 +134,8 @@
                 <exclude.test.9>empty.java</exclude.test.9>
                 <exclude.test.10>empty.java</exclude.test.10>
                 <exclude.test.11>empty.java</exclude.test.11>
+                <exclude.test.12>empty.java</exclude.test.12>
+                <exclude.test.13>empty.java</exclude.test.13>
             </properties>
 
         </profile>
@@ -141,24 +149,24 @@
         </profile>
     </profiles>
 
-    <reporting>
-        <plugins>
-
-        </plugins>
-    </reporting>
-
     <build>
-        <plugins>
+        <resources>
+            <resource>
+                <directory>${basedir}/src/main/resources</directory>
+                <filtering>true</filtering>
+            </resource>
+        </resources>
 
+        <plugins>
             <plugin>
                 <groupId>org.codehaus.mojo</groupId>
-                <artifactId>templating-maven-plugin</artifactId>
-                <version>1.0.0</version>
+                <artifactId>buildnumber-maven-plugin</artifactId>
+                <version>1.4</version>
                 <executions>
                     <execution>
-                        <id>generate-verion-class</id>
+                        <phase>validate</phase>
                         <goals>
-                            <goal>filter-sources</goal>
+                            <goal>create</goal>
                         </goals>
                     </execution>
                 </executions>
@@ -201,6 +209,8 @@
                         <exclude>${exclude.test.9}</exclude>
                         <exclude>${exclude.test.10}</exclude>
                         <exclude>${exclude.test.11}</exclude>
+                        <exclude>${exclude.test.12}</exclude>
+                        <exclude>${exclude.test.13}</exclude>
                     </excludes>
                     <properties>
                         <property>

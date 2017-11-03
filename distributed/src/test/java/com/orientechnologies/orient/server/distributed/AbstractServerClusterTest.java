@@ -17,7 +17,6 @@ package com.orientechnologies.orient.server.distributed;
 
 import com.hazelcast.core.Hazelcast;
 import com.hazelcast.core.HazelcastInstance;
-import com.hazelcast.instance.GroupProperties;
 import com.orientechnologies.common.concur.OTimeoutException;
 import com.orientechnologies.common.log.OLogManager;
 import com.orientechnologies.common.util.OCallable;
@@ -34,6 +33,7 @@ import com.orientechnologies.orient.server.distributed.impl.task.OCreateRecordTa
 import com.orientechnologies.orient.server.distributed.impl.task.OFixCreateRecordTask;
 import com.orientechnologies.orient.server.distributed.impl.task.OFixUpdateRecordTask;
 import com.orientechnologies.orient.server.distributed.impl.task.OReadRecordTask;
+import com.orientechnologies.orient.server.hazelcast.ONetworkSimulator;
 import com.tinkerpop.blueprints.impls.orient.OrientBaseGraph;
 import com.tinkerpop.blueprints.impls.orient.OrientGraphFactory;
 import org.junit.Assert;
@@ -102,8 +102,6 @@ public abstract class AbstractServerClusterTest {
 
   public void init(final int servers) {
     Orient.instance().closeAllStorages();
-
-    System.setProperty(GroupProperties.PROP_WAIT_SECONDS_BEFORE_JOIN, "1");
 
     Orient.setRegisterDatabaseByPath(true);
     for (int i = 0; i < servers; ++i)
@@ -238,10 +236,12 @@ public abstract class AbstractServerClusterTest {
 
   protected void banner(final String iMessage) {
     OLogManager.instance()
-        .error(this, "**********************************************************************************************************");
-    OLogManager.instance().error(this, iMessage);
+        .error(this, "**********************************************************************************************************",
+            null);
+    OLogManager.instance().error(this, iMessage, null);
     OLogManager.instance()
-        .error(this, "**********************************************************************************************************");
+        .error(this, "**********************************************************************************************************",
+            null);
   }
 
   protected void log(final String iMessage) {
@@ -278,8 +278,6 @@ public abstract class AbstractServerClusterTest {
 
   /**
    * Create the database on first node only
-   *
-   * @throws IOException
    */
   protected void prepare(final boolean iCopyDatabaseToNodes, final boolean iCreateDatabase) throws IOException {
     prepare(iCopyDatabaseToNodes, iCreateDatabase, null);
@@ -287,8 +285,6 @@ public abstract class AbstractServerClusterTest {
 
   /**
    * Create the database on first node only
-   *
-   * @throws IOException
    */
   protected void prepare(final boolean iCopyDatabaseToNodes, final boolean iCreateDatabase,
       final OCallable<Object, OrientGraphFactory> iCfgCallback) throws IOException {
@@ -318,6 +314,8 @@ public abstract class AbstractServerClusterTest {
   }
 
   protected void deleteServers() {
+    ONetworkSimulator.getInstance().reset();
+
     for (ServerRun s : serverInstance)
       s.deleteNode();
 
@@ -350,9 +348,9 @@ public abstract class AbstractServerClusterTest {
       executeWhen(db, condition, action);
     } finally {
       if (!db.isClosed()) {
-        ODatabaseRecordThreadLocal.INSTANCE.set(db);
+        ODatabaseRecordThreadLocal.instance().set(db);
         db.close();
-        ODatabaseRecordThreadLocal.INSTANCE.set(null);
+        ODatabaseRecordThreadLocal.instance().set(null);
       }
     }
   }
@@ -387,7 +385,7 @@ public abstract class AbstractServerClusterTest {
         != status) {
 
       if (timeout > 0 && System.currentTimeMillis() - startTime > timeout) {
-        OLogManager.instance().error(this, "TIMEOUT on wait-for condition (timeout=" + timeout + ")");
+        OLogManager.instance().error(this, "TIMEOUT on wait-for condition (timeout=" + timeout + ")", null);
         break;
       }
 
@@ -404,7 +402,7 @@ public abstract class AbstractServerClusterTest {
     while (serverInstance.get(0).getServerInstance().getDistributedManager().isNodeOnline(serverName, dbName)) {
 
       if (timeout > 0 && System.currentTimeMillis() - startTime > timeout) {
-        OLogManager.instance().error(this, "TIMEOUT on wait-for condition (timeout=" + timeout + ")");
+        OLogManager.instance().error(this, "TIMEOUT on wait-for condition (timeout=" + timeout + ")", null);
         break;
       }
 
@@ -421,7 +419,7 @@ public abstract class AbstractServerClusterTest {
     while (!serverInstance.get(fromServerId).getServerInstance().getDistributedManager().isNodeOnline(serverName, dbName)) {
 
       if (timeout > 0 && System.currentTimeMillis() - startTime > timeout) {
-        OLogManager.instance().error(this, "TIMEOUT on waitForDatabaseIsOnline condition (timeout=" + timeout + ")");
+        OLogManager.instance().error(this, "TIMEOUT on waitForDatabaseIsOnline condition (timeout=" + timeout + ")", null);
         break;
       }
 
@@ -447,7 +445,7 @@ public abstract class AbstractServerClusterTest {
           }
 
           if (timeout > 0 && System.currentTimeMillis() - startTime > timeout) {
-            OLogManager.instance().error(this, "TIMEOUT on wait-for condition (timeout=" + timeout + ")");
+            OLogManager.instance().error(this, "TIMEOUT on wait-for condition (timeout=" + timeout + ")", null);
             break;
           }
 
@@ -460,9 +458,9 @@ public abstract class AbstractServerClusterTest {
 
       } finally {
         if (!db.isClosed()) {
-          ODatabaseRecordThreadLocal.INSTANCE.set(db);
+          ODatabaseRecordThreadLocal.instance().set(db);
           db.close();
-          ODatabaseRecordThreadLocal.INSTANCE.set(null);
+          ODatabaseRecordThreadLocal.instance().set(null);
         }
       }
     } catch (Exception e) {
@@ -498,7 +496,7 @@ public abstract class AbstractServerClusterTest {
     final ODistributedServerManager dManager = serverInstance.get(serverId).getServerInstance().getDistributedManager();
 
     final Collection<String> clusterNames = new ArrayList<String>(1);
-    clusterNames.add(ODatabaseRecordThreadLocal.INSTANCE.get().getClusterNameById(rid.getClusterId()));
+    clusterNames.add(ODatabaseRecordThreadLocal.instance().get().getClusterNameById(rid.getClusterId()));
 
     ODistributedResponse response = dManager
         .sendRequest(getDatabaseName(), clusterNames, Arrays.asList(servers), new OReadRecordTask().init(rid),
@@ -516,7 +514,7 @@ public abstract class AbstractServerClusterTest {
     final ODistributedServerManager dManager = serverInstance.get(serverId).getServerInstance().getDistributedManager();
 
     final Collection<String> clusterNames = new ArrayList<String>(1);
-    clusterNames.add(ODatabaseRecordThreadLocal.INSTANCE.get().getClusterNameById(record.getIdentity().getClusterId()));
+    clusterNames.add(ODatabaseRecordThreadLocal.instance().get().getClusterNameById(record.getIdentity().getClusterId()));
 
     return dManager.sendRequest(getDatabaseName(), clusterNames, Arrays.asList(servers), new OCreateRecordTask()
             .init((ORecordId) record.getIdentity(), record.toStream(), record.getVersion(), ORecordInternal.getRecordType(record)),
@@ -527,7 +525,7 @@ public abstract class AbstractServerClusterTest {
     final ODistributedServerManager dManager = serverInstance.get(serverId).getServerInstance().getDistributedManager();
 
     final Collection<String> clusterNames = new ArrayList<String>(1);
-    clusterNames.add(ODatabaseRecordThreadLocal.INSTANCE.get().getClusterNameById(record.getIdentity().getClusterId()));
+    clusterNames.add(ODatabaseRecordThreadLocal.instance().get().getClusterNameById(record.getIdentity().getClusterId()));
 
     return dManager.sendRequest(getDatabaseName(), clusterNames, Arrays.asList(servers), new OFixUpdateRecordTask()
             .init((ORecordId) record.getIdentity(), record.toStream(), record.getVersion(), ORecordInternal.getRecordType(record)),
@@ -538,7 +536,7 @@ public abstract class AbstractServerClusterTest {
     final ODistributedServerManager dManager = serverInstance.get(serverId).getServerInstance().getDistributedManager();
 
     final Collection<String> clusterNames = new ArrayList<String>(1);
-    clusterNames.add(ODatabaseRecordThreadLocal.INSTANCE.get().getClusterNameById(rid.getClusterId()));
+    clusterNames.add(ODatabaseRecordThreadLocal.instance().get().getClusterNameById(rid.getClusterId()));
 
     return dManager.sendRequest(getDatabaseName(), clusterNames, Arrays.asList(servers), new OFixCreateRecordTask().init(rid, -1),
         dManager.getNextMessageIdCounter(), ODistributedRequest.EXECUTION_MODE.RESPONSE, null, null, null);
