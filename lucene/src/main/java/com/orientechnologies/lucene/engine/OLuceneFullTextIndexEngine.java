@@ -26,7 +26,11 @@ import com.orientechnologies.lucene.collections.OLuceneCompositeKey;
 import com.orientechnologies.lucene.collections.OLuceneResultSet;
 import com.orientechnologies.lucene.collections.OLuceneResultSetFactory;
 import com.orientechnologies.lucene.query.OLuceneQueryContext;
+import com.orientechnologies.lucene.search.OLuceneHighlighter;
 import com.orientechnologies.lucene.tx.OLuceneTxChanges;
+import com.orientechnologies.lucene.search.OLuceneHits;
+import com.orientechnologies.lucene.search.OLuceneExplanation;
+import com.orientechnologies.lucene.analyzer.OLuceneAnalyzerFactory;
 import com.orientechnologies.orient.core.command.OCommandContext;
 import com.orientechnologies.orient.core.db.record.OIdentifiable;
 import com.orientechnologies.orient.core.id.OContextualRecordId;
@@ -41,15 +45,17 @@ import org.apache.lucene.search.IndexSearcher;
 import org.apache.lucene.search.Query;
 import org.apache.lucene.search.ScoreDoc;
 import org.apache.lucene.store.Directory;
+import org.apache.lucene.analysis.Analyzer;
 
 import java.io.IOException;
 import java.util.*;
 
 public class OLuceneFullTextIndexEngine extends OLuceneIndexEngineAbstract {
 
-  protected OLuceneFacetManager    facetManager;
-  private   OLuceneDocumentBuilder builder;
-  private   OLuceneQueryBuilder    queryBuilder;
+  protected OLuceneFacetManager facetManager;
+  private OLuceneDocumentBuilder builder;
+  private OLuceneQueryBuilder queryBuilder;
+  private Query queryOriginal;
 
   public OLuceneFullTextIndexEngine(OStorage storage, String idxName) {
     super(storage, idxName);
@@ -96,11 +102,15 @@ public class OLuceneFullTextIndexEngine extends OLuceneIndexEngineAbstract {
   }
 
   @Override
-  public void onRecordAddedToResultSet(OLuceneQueryContext queryContext, OContextualRecordId recordId, Document ret,
-      final ScoreDoc score) {
+  public void onRecordAddedToResultSet(final OLuceneQueryContext queryContext, final OContextualRecordId recordId, Document ret,
+                                       final ScoreDoc score) {
+    final OLuceneHits hits = new OLuceneHits(queryContext, score, queryOriginal);
     recordId.setContext(new HashMap<String, Object>() {
       {
         put("score", score.score);
+        put("explain", new OLuceneExplanation(queryContext, score));
+        put("hits", hits);
+        put("highlights", new OLuceneHighlighter(queryContext, hits, recordId, indexAnalyzer()));
       }
     });
   }
@@ -167,7 +177,7 @@ public class OLuceneFullTextIndexEngine extends OLuceneIndexEngineAbstract {
 
   @Override
   public OIndexCursor iterateEntriesBetween(Object rangeFrom, boolean fromInclusive, Object rangeTo, boolean toInclusive,
-      boolean ascSortOrder, ValuesTransformer transformer) {
+                                            boolean ascSortOrder, ValuesTransformer transformer) {
     return new LuceneIndexCursor((OLuceneResultSet) get(rangeFrom), rangeFrom);
   }
 
@@ -188,7 +198,7 @@ public class OLuceneFullTextIndexEngine extends OLuceneIndexEngineAbstract {
 
   @Override
   public OIndexCursor iterateEntriesMajor(Object fromKey, boolean isInclusive, boolean ascSortOrder,
-      ValuesTransformer transformer) {
+                                          ValuesTransformer transformer) {
     return null;
   }
 
@@ -252,6 +262,12 @@ public class OLuceneFullTextIndexEngine extends OLuceneIndexEngineAbstract {
   @Override
   public Object getInTx(Object key, OLuceneTxChanges changes) {
     try {
+      Analyzer termsAnalyzer = (new OLuceneAnalyzerFactory()).createAnalyzer(
+        index,
+        OLuceneAnalyzerFactory.AnalyzerKind.QUERY,
+        new ODocument("default", "org.apache.lucene.analysis.core.WhitespaceAnalyzer")
+      );
+      queryOriginal = (new OLuceneQueryBuilder(false, false)).query(index, key, termsAnalyzer);
       Query q = queryBuilder.query(index, key, queryAnalyzer());
       OCommandContext context = null;
       if (key instanceof OLuceneCompositeKey) {
@@ -265,8 +281,8 @@ public class OLuceneFullTextIndexEngine extends OLuceneIndexEngineAbstract {
 
   public class LuceneIndexCursor implements OIndexCursor {
 
-    private final Object           key;
-    private       OLuceneResultSet resultSet;
+    private final Object key;
+    private OLuceneResultSet resultSet;
 
     private Iterator<OIdentifiable> iterator;
 
