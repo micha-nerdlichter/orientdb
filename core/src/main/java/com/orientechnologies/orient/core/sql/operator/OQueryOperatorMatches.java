@@ -24,7 +24,10 @@ import com.orientechnologies.orient.core.db.record.OIdentifiable;
 import com.orientechnologies.orient.core.id.ORID;
 import com.orientechnologies.orient.core.sql.filter.OSQLFilterCondition;
 
+import java.util.HashMap;
+import java.util.Map;
 import java.util.regex.Pattern;
+import java.util.regex.Matcher;
 
 /**
  * MATCHES operator. Matches the left value against the regular expression contained in the second one.
@@ -66,6 +69,19 @@ public class OQueryOperatorMatches extends OQueryOperatorEqualityNotNulls {
       p = Pattern.compile(iRegex);
       iContext.setVariable(key, p);
     }
-    return p.matcher(iValue).matches();
+
+    Matcher m = p.matcher(iValue);
+    if (m.matches()) {
+      Map<Integer, String> iMatches = new HashMap<Integer, String>();
+      for(int i = 1; i <= m.groupCount(); i++) {
+        String match = m.group(i);
+        if (match != null) {
+          iMatches.put(i, match);
+        }
+      }
+      iContext.setVariable("matches", iMatches);
+      return true;
+    }
+    return false;
   }
 }
